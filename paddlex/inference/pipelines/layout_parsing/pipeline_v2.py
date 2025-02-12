@@ -594,6 +594,7 @@ class LayoutParsingPipelineV2(BasePipeline):
                 ]
 
             single_img_res = {
+                "block_size": [doc_preprocessor_image.shape[1], doc_preprocessor_image.shape[0]],
                 "input_path": batch_data.input_paths[0],
                 "page_index": batch_data.page_indexes[0],
                 "doc_preprocessor_res": doc_preprocessor_res,

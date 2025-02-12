@@ -17,7 +17,8 @@ from paddlex import create_pipeline
 pipeline = create_pipeline(pipeline="layout_parsing_v2")
 
 output = pipeline.predict(
-    "./test_samples/demo_paper.png",
+    # "/mnt/shuailiu35/compare_with_mineru/30/mask_xycut/input.pdf",
+    "/mnt/shuailiu35/compare_with_mineru/70/mask_xycut-v1/input.pdf",
     use_doc_orientation_classify=False,
     use_doc_unwarping=False,
     use_common_ocr=True,
@@ -26,9 +27,9 @@ output = pipeline.predict(
 )
 
 for res in output:
-    res.print()
-    res.save_to_img("./output")
-    res.save_to_json("./output")
-    res.save_to_xlsx("./output")
-    res.save_to_html("./output")
-    res.save_to_markdown("./output")
+    # res.print()
+    res.save_to_img("./output1")
+    res.save_to_json("./output1")
+    # res.save_to_xlsx("./output")
+    # res.save_to_html("./output")
+    # res.save_to_markdown("./output")
