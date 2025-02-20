@@ -17,8 +17,8 @@ from paddlex import create_pipeline
 pipeline = create_pipeline(pipeline="layout_parsing_v2")
 
 output = pipeline.predict(
-    # "/mnt/shuailiu35/eval_layout_order/30/mask_xycut/input.pdf",
-    "/mnt/shuailiu35/eval_layout_order/70/input.pdf",
+    "/mnt/shuailiu35/eval_layout_order/30/input.pdf",
+    # "/mnt/shuailiu35/eval_layout_order/70/input.pdf",
     use_doc_orientation_classify=False,
     use_doc_unwarping=False,
     use_common_ocr=True,
