@@ -13,7 +13,7 @@
 # limitations under the License.
 from __future__ import annotations
 
-from typing import Optional, Union, Tuple
+from typing import Optional, Union, Tuple, Iterator
 import numpy as np
 import re
 
@@ -594,6 +594,10 @@ class LayoutParsingPipelineV2(BasePipeline):
                 ]
 
             single_img_res = {
+                "block_size": [
+                    doc_preprocessor_image.shape[1],
+                    doc_preprocessor_image.shape[0],
+                ],
                 "input_path": batch_data.input_paths[0],
                 "page_index": batch_data.page_indexes[0],
                 "doc_preprocessor_res": doc_preprocessor_res,
@@ -607,28 +611,27 @@ class LayoutParsingPipelineV2(BasePipeline):
             }
             yield LayoutParsingResultV2(single_img_res)
 
-    def concatenate_markdown_pages(self, layout_parsing_pipeline_output: list) -> tuple:
+    def concatenate_markdown_pages(self, markdown_list: list) -> tuple:
         """
         Concatenate Markdown content from multiple pages into a single document.
 
         Args:
-            layout_parsing_pipeline_output (list): A list containing Markdown data for each page.
+            markdown_list (list): A list containing Markdown data for each page.
 
         Returns:
-            tuple: A tuple containing the processed Markdown text and a list of images.
+            tuple: A tuple containing the processed Markdown text.
         """
         markdown_texts = ""
-        markdown_images = []
         previous_page_last_element_paragraph_end_flag = True
 
-        for res in layout_parsing_pipeline_output:
+        for res in markdown_list:
             # Get the paragraph flags for the current page
-            page_first_element_paragraph_start_flag: bool = res.markdown[
+            page_first_element_paragraph_start_flag: bool = res[
                 "page_continuation_flags"
             ][0]
-            page_last_element_paragraph_end_flag: bool = res.markdown[
-                "page_continuation_flags"
-            ][1]
+            page_last_element_paragraph_end_flag: bool = res["page_continuation_flags"][
+                1
+            ]
 
             # Determine whether to add a space or a newline
             if (
@@ -637,9 +640,7 @@ class LayoutParsingPipelineV2(BasePipeline):
             ):
                 last_char_of_markdown = markdown_texts[-1] if markdown_texts else ""
                 first_char_of_handler = (
-                    res.markdown["markdown_texts"][0]
-                    if res.markdown["markdown_texts"]
-                    else ""
+                    res["markdown_texts"][0] if res["markdown_texts"] else ""
                 )
 
                 # Check if the last character and the first character are Chinese characters
@@ -654,14 +655,13 @@ class LayoutParsingPipelineV2(BasePipeline):
                     else False
                 )
                 if not (last_is_chinese_char or first_is_chinese_char):
-                    markdown_texts += " " + res.markdown["markdown_texts"]
+                    markdown_texts += " " + res["markdown_texts"]
                 else:
-                    markdown_texts += res.markdown["markdown_texts"]
+                    markdown_texts += res["markdown_texts"]
             else:
-                markdown_texts += "\n\n" + res.markdown["markdown_texts"]
+                markdown_texts += "\n\n" + res["markdown_texts"]
             previous_page_last_element_paragraph_end_flag = (
                 page_last_element_paragraph_end_flag
             )
-            markdown_images.append(res.markdown.get("markdown_images", {}))
 
-        return markdown_texts, markdown_images
+        return markdown_texts

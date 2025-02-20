@@ -170,9 +170,11 @@ class LayoutParsingResultV2(BaseCVResult, HtmlMixin, XlsxMixin, MarkdownMixin):
                 "block_label": parsing_res["block_label"],
                 "block_content": parsing_res["block_content"],
                 "block_bbox": parsing_res["block_bbox"],
+                "index": parsing_res.get("index", None),
             }
             for parsing_res in parsing_res_list
         ]
+        data["block_size"] = self["block_size"]
         data["parsing_res_list"] = parsing_res_list
         if self["model_settings"]["use_doc_preprocessor"]:
             data["doc_preprocessor_res"] = self["doc_preprocessor_res"].json["res"]
