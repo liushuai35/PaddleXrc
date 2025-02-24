@@ -821,6 +821,43 @@ def sort_by_xycut(
                 res,
                 min_gap,
             )
+    axis = "x" if direction == 1 else "y"
+    if len(pre_cuts[axis]) > 0:
+        cuts = sorted(pre_cuts[axis])
+        axis_index = 1 if axis == "y" else 0
+        max_val = block_bboxes[:, 3].max() if axis == "y" else block_bboxes[:, 2].max()
+        intervals = []
+        prev = 0
+        for cut in cuts:
+            intervals.append((prev, cut))
+            prev = cut
+        intervals.append((prev, max_val))
+        for start, end in intervals:
+            mask = (block_bboxes[:, axis_index] >= start) & (
+                block_bboxes[:, axis_index] < end
+            )
+            sub_boxes = block_bboxes[mask]
+            sub_indices = np.arange(len(block_bboxes))[mask].tolist()
+            if len(sub_boxes) > 0:
+                if direction == 1:
+                    _recursive_yx_cut(sub_boxes, sub_indices, res, min_gap)
+                else:
+                    _recursive_xy_cut(sub_boxes, sub_indices, res, min_gap)
+    else:
+        if direction == 1:
+            _recursive_yx_cut(
+                block_bboxes,
+                np.arange(len(block_bboxes)).tolist(),
+                res,
+                min_gap,
+            )
+        else:
+            _recursive_xy_cut(
+                block_bboxes,
+                np.arange(len(block_bboxes)).tolist(),
+                res,
+                min_gap,
+            )
 
     return res
 
@@ -1122,6 +1159,7 @@ def _get_sub_category(
 ) -> Tuple[List[Dict[str, Any]], List[float]]:
     """
     Determine the layout of title and text blocks and collect pre_cuts.
+    Determine the layout of title and text blocks and collect pre_cuts.
 
     Args:
         blocks (List[Dict[str, Any]]): List of block dictionaries.
@@ -1129,6 +1167,7 @@ def _get_sub_category(
 
     Returns:
         List[Dict[str, Any]]: Updated list of blocks with title-text layout information.
+        List[float]: List of pre_cuts coordinates.
         List[float]: List of pre_cuts coordinates.
     """
 
