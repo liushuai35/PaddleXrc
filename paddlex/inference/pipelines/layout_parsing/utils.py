@@ -812,7 +812,7 @@ def _img_array2path(data: np.ndarray) -> str:
         # Generate a unique filename using UUID
         img_name = f"image_{uuid.uuid4().hex}.png"
 
-        return {f"imgs/{img_name}": Image.fromarray(data)}
+        return {f"imgs/{img_name}": Image.fromarray(data[:, :, ::-1])}
     else:
         raise ValueError(
             "Input data must be a 3-dimensional numpy array representing an image."
@@ -1146,9 +1146,10 @@ def _get_sub_category(
         else:
             block_length = y2 - y1
             required_length = region_height / 2
-        length_condition = block_length > required_length
         if block1["block_label"] in special_pre_cut_labels:
             length_condition = True
+        else:
+            length_condition = block_length > required_length
 
         # Condition 2: Centered check (must be within ±20 in both horizontal and vertical directions)
         block_x_center = (x1 + x2) / 2
@@ -1517,18 +1518,14 @@ def get_layout_ordering(
                     ),
                 )
                 block_bboxes = np.array(block_bboxes)
-                sorted_indices = sort_by_xycut(
-                    block_bboxes, direction=1, min_gap=1, pre_cuts=pre_cuts
-                )
+                sorted_indices = sort_by_xycut(block_bboxes, direction=1, min_gap=1)
             else:
                 block_bboxes = [
                     block["block_bbox"] for block in parsing_res_by_pre_cuts
                 ]
                 block_bboxes.sort(key=lambda x: (x[0] // 20, x[1]))
                 block_bboxes = np.array(block_bboxes)
-                sorted_indices = sort_by_xycut(
-                    block_bboxes, direction=0, min_gap=20, pre_cuts=pre_cuts
-                )
+                sorted_indices = sort_by_xycut(block_bboxes, direction=0, min_gap=20)
 
             sorted_boxes = block_bboxes[sorted_indices].tolist()
 
@@ -1708,7 +1705,7 @@ def get_layout_ordering(
         # title-text label
         nearest_match_(title_text_blocks, distance_type="title_text")
 
-        def lam(x):
+        def hor_tb_and_ver_lr(x):
             input_bbox = x["block_bbox"]
             is_horizontal = _get_bbox_direction(input_bbox)
             if is_horizontal:
@@ -1717,7 +1714,7 @@ def get_layout_ordering(
                 return input_bbox[0]
 
         parsing_res_by_pre_cuts.sort(
-            key=lambda x: (x["index"], lam(x)),
+            key=lambda x: (x["index"], hor_tb_and_ver_lr(x)),
         )
 
         for idx, block in enumerate(parsing_res_by_pre_cuts):
@@ -2175,12 +2172,15 @@ def _nearest_iou_edge_distance(
     # Update minimum distance configuration if a smaller distance is found
     if total_distance > distance:
         edge_distance_config = [
-            min(min_edge_distance_config[0], edge_distance_config[0]),
-            min(min_edge_distance_config[1], edge_distance_config[1]),
+            edge_distance_config[0],
+            edge_distance_config[1],
+            # min(min_edge_distance_config[0], edge_distance_config[0]),
+            # min(min_edge_distance_config[1], edge_distance_config[1]),
         ]
         min_distance_config = [
             edge_distance_config,
-            min(up_edge_distance, up_edge_distances_config),
+            # min(up_edge_distance, up_edge_distances_config),
+            up_edge_distance,
             distance,
         ]
 

@@ -14,10 +14,10 @@
 
 from paddlex import create_pipeline
 
-pipeline = create_pipeline(pipeline="layout_parsing_v2")
+pipeline = create_pipeline(pipeline="layout_parsing_v2", device="gpu:0")
 
 output = pipeline.predict(
-    "/mnt/shuailiu35/eval_layout_order/30/input.pdf",
+    "/home/shuai.liu01/PaddleXrc/b9b1f972631abb00740569234a60ffd.jpg",
     # "/mnt/shuailiu35/eval_layout_order/70/input.pdf",
     use_doc_orientation_classify=False,
     use_doc_unwarping=False,

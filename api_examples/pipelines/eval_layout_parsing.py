@@ -412,7 +412,7 @@ if __name__ == "__main__":
 
     # PaddleX
     input_jsons = glob.glob(
-        "/home/shuai.liu01/PaddleXrc/api_examples/pipelines/output/*.json"
+        "/home/shuai.liu01/PaddleXrc/api_examples/pipelines/output1/*.json"
     )
 
     input_jsons.sort(key=lambda x: int(os.path.basename(x).split("_")[1]))
