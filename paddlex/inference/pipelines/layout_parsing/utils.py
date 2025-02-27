@@ -2149,10 +2149,7 @@ def _nearest_iou_edge_distance(
     up_edge_distance = y1_prime
     left_edge_distance = x1_prime
     if (
-        # label in no_mask_labels or label == "paragraph_title" or label in vision_labels
-        label in no_mask_labels
-        or label == title_labels
-        or label in vision_labels
+        label in no_mask_labels or label in title_labels or label in vision_labels
     ) and y1 > y2_prime:
         up_edge_distance = -y2_prime
         left_edge_distance = -x2_prime
@@ -2174,12 +2171,9 @@ def _nearest_iou_edge_distance(
         edge_distance_config = [
             edge_distance_config[0],
             edge_distance_config[1],
-            # min(min_edge_distance_config[0], edge_distance_config[0]),
-            # min(min_edge_distance_config[1], edge_distance_config[1]),
         ]
         min_distance_config = [
             edge_distance_config,
-            # min(up_edge_distance, up_edge_distances_config),
             up_edge_distance,
             distance,
         ]
