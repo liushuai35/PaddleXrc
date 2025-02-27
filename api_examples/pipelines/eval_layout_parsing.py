@@ -405,18 +405,21 @@ if __name__ == "__main__":
     import os
     import glob
 
-    # gt_data = load_data_from_json("/mnt/shuailiu35/eval_layout_order/70/gt_70.json")
-    gt_data = load_data_from_json("/mnt/shuailiu35/eval_layout_order/30/gt_30.json")
+    gt_data = load_data_from_json(
+        "/home/shuai.liu01/PaddleXrc/eval_layout_order/70/gt_70.json"
+    )
+    # gt_data = load_data_from_json("/home/shuai.liu01/PaddleXrc/eval_layout_order/30/gt_30.json")
 
     # PaddleX
     input_jsons = glob.glob(
-        "/mnt/shuailiu35/PaddleX/api_examples/pipelines/output1/*.json"
+        "/home/shuai.liu01/PaddleXrc/api_examples/pipelines/output/*.json"
     )
-    # input_jsons = glob.glob("/mnt/shuailiu35/PaddleX/api_examples/pipelines/output/*.json")
 
     input_jsons.sort(key=lambda x: int(os.path.basename(x).split("_")[1]))
     input_data = []
     for i, input_json in enumerate(input_jsons):
+        if i == len(gt_data):
+            break
         data = load_data_from_json(input_json)
         input_data.append(paddlex_generate_input_data(data, [gt_data[i]]))
 

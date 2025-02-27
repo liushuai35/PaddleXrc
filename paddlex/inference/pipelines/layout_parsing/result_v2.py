@@ -199,6 +199,7 @@ class LayoutParsingResultV2(BaseCVResult, HtmlMixin, XlsxMixin, MarkdownMixin):
             for sno in range(len(self["formula_res_list"])):
                 formula_res = self["formula_res_list"][sno]
                 data["formula_res_list"].append(formula_res.json["res"])
+        print(data["page_index"], "success")
         return JsonMixin._to_json(data, *args, **kwargs)
 
     def _to_html(self) -> dict[str, str]:
