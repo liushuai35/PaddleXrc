@@ -20,7 +20,7 @@ from PIL import Image, ImageDraw
 import re
 import numpy as np
 from PIL import Image
-from PIL import ImageDraw
+from PIL import ImageDraw, ImageFont
 
 from ...common.result import (
     BaseCVResult,
@@ -93,6 +93,13 @@ class LayoutParsingResultV2(BaseCVResult, HtmlMixin, XlsxMixin, MarkdownMixin):
         image = Image.fromarray(self["doc_preprocessor_res"]["output_img"])
         draw = ImageDraw.Draw(image, "RGBA")
         parsing_result = self["parsing_res_list"]
+        font_path = "/home/shuai.liu01/PaddleXrc/DroidSans-Bold.ttf"
+        # Load the specified font or use default if not found
+        try:
+            font = ImageFont.truetype(font_path, 25)
+        except IOError:
+            print("Font not found, using default font.")
+            font = ImageFont.load_default()
         for block in parsing_result:
             bbox = block["block_bbox"]
             index = block.get("index", None)
@@ -101,7 +108,7 @@ class LayoutParsingResultV2(BaseCVResult, HtmlMixin, XlsxMixin, MarkdownMixin):
             draw.rectangle(bbox, fill=fill_color)
             if index is not None:
                 text_position = (bbox[2] + 2, bbox[1] - 10)
-                draw.text(text_position, str(index), fill="red")
+                draw.text(text_position, str(index), fill="red", font=font)
 
         res_img_dict["layout_order_res"] = image
 

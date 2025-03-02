@@ -293,7 +293,7 @@ def calculate_metrics_with_page(
     )
 
 
-def paddlex_generate_input_data(data, gt_data):
+def paddlex_generate_input_data(data, gt_data=None):
     """
     Generate input data for evaluation based on layout parsing results.
 
@@ -305,7 +305,7 @@ def paddlex_generate_input_data(data, gt_data):
     """
     parsing_result = data["parsing_res_list"]
     block_size = data["block_size"]
-    gt_block_size = gt_data[0]["block_size"]
+    gt_block_size = gt_data[0]["block_size"] if gt_data else block_size
     input_data = {
         "block_bbox": [0, 0, 2550, 2550],
         "sub_indices": [],
@@ -329,6 +329,70 @@ def paddlex_generate_input_data(data, gt_data):
             input_data["sub_indices"].append(int(sub_block["index"]))
 
     return input_data
+
+
+def get_gt_json(data, idx):
+    """
+    Generate input data for evaluation based on layout parsing results.
+
+    Args:
+        data: Dictionary containing parsing results.
+
+    Returns:
+        list: Formatted list of input data.
+    """
+    parsing_result = data["parsing_res_list"]
+    block_size = data["block_size"]
+    input_data = {
+        "block_bbox": [0, 0, 2550, 2550],
+        "sub_indices": [],
+        "sub_bboxes": [],
+        "sub_labels": [],
+        "block_size": block_size,
+        "page_idx": idx,
+    }
+    for sub_block in parsing_result:
+        if sub_block.get("index") != None:
+            input_data["sub_bboxes"].append(list(map(int, sub_block["block_bbox"])))
+            input_data["sub_indices"].append(int(sub_block["index"]))
+            input_data["sub_labels"].append(sub_block["block_label"])
+
+    return input_data
+
+
+def get_input_json(data):
+    """
+    Generate input data for evaluation based on layout parsing results.
+
+    Args:
+        data: Dictionary containing parsing results.
+
+    Returns:
+        list: Formatted list of input data.
+    """
+    parsing_result = data["parsing_res_list"]
+    block_size = data["block_size"]
+    for sub_block in parsing_result:
+        sub_block["block_size"] = block_size
+        del sub_block["index"]
+        del sub_block["block_content"]
+
+    # from paddlex.inference.pipelines.layout_parsing.utils import get_layout_ordering
+    # parsing_result = get_layout_ordering(
+    #     parsing_result,
+    #     no_mask_labels=[
+    #         "text",
+    #         "formula",
+    #         "algorithm",
+    #         "reference",
+    #         "content",
+    #         "abstract",
+    #     ],
+    # )
+
+    # for sub_block in parsing_result:
+    #     sub_block["block_size"] = block_size
+    return parsing_result
 
 
 def mineru_generate_input_data(data, gt_data):
@@ -400,19 +464,26 @@ def load_data_from_json(path):
     return data
 
 
+def write_data_from_json(path, data):
+    with open(path, "w", encoding="utf-8") as file:
+        json.dump(data, file, ensure_ascii=False, indent=4)
+
+
 if __name__ == "__main__":
     import json
     import os
     import glob
 
+    num = 30
+    dir_name = "xycut"
+
     gt_data = load_data_from_json(
-        "/home/shuai.liu01/PaddleXrc/eval_layout_order/70/gt_70.json"
+        f"/home/shuai.liu01/PaddleXrc/api_examples/pipelines/all_gt/gt_{num}.json"
     )
-    # gt_data = load_data_from_json("/home/shuai.liu01/PaddleXrc/eval_layout_order/30/gt_30.json")
 
     # PaddleX
     input_jsons = glob.glob(
-        "/home/shuai.liu01/PaddleXrc/api_examples/pipelines/output1/*.json"
+        f"/home/shuai.liu01/PaddleXrc/api_examples/pipelines/{dir_name}/{num}/*.json"
     )
 
     input_jsons.sort(key=lambda x: int(os.path.basename(x).split("_")[1]))
@@ -426,5 +497,25 @@ if __name__ == "__main__":
     # MinerU
     # data = load_data_from_json("/workspace/shuailiu35/eval_layout_order/70/mineru/input/input_middle.json")
     # input_data = mineru_generate_input_data(data,gt_data)
+
     bleu_score, ard, tau = calculate_metrics_with_page(input_data, gt_data)
     print(f"BLEU score: {bleu_score}, ARD: {ard}, Tau :{tau}")
+
+    # num_list = [30,70]
+    # dir_list = ["all_gt"]
+
+    # for num in num_list:
+    #     for dir_name in dir_list:
+    #         # PaddleX
+    #         input_jsons = glob.glob(
+    #             f"/home/shuai.liu01/PaddleXrc/api_examples/pipelines/{dir_name}/{num}/*.json"
+    #         )
+
+    #         input_jsons.sort(key=lambda x: int(os.path.basename(x).split("_")[1]))
+    #         input_data = []
+    #         for i, input_json in enumerate(input_jsons):
+    #             # for generate gt json
+    #             data = load_data_from_json(input_json)
+    #             input_data.append(get_gt_json(data,i))
+
+    #         write_data_from_json(f"/home/shuai.liu01/PaddleXrc/api_examples/pipelines/{dir_name}/gt_{num}.json",input_data)

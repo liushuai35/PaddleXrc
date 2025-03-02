@@ -951,6 +951,7 @@ def _get_layout_property(
     median_width: float,
     no_mask_labels: List[str],
     threshold: float = 0.8,
+    # other_layout_threshold: float = 0.4,
 ) -> Tuple[List[Dict[str, any]], bool]:
     """
     Determine the layout (single or double column) of text blocks.
@@ -987,7 +988,7 @@ def _get_layout_property(
 
         x_min_i, _, x_max_i, _ = block["block_bbox"]
         layout_length = x_max_i - x_min_i
-        cover_count, cover_with_threshold_count = 0, 0
+        cover_count, cover_with_threshold_count, other_layout_threshold_count = 0, 0, 0
         match_block_with_threshold_indexes = []
 
         for j, other_block in enumerate(blocks):
@@ -1000,6 +1001,7 @@ def _get_layout_property(
                 x_min_j,
             ), min(x_max_i, x_max_j)
             match_block_iou = (x_match_max - x_match_min) / (x_max_j - x_min_j)
+            # max_iou = _get_projection_iou(block["block_bbox"],other_block["block_bbox"])
 
             if match_block_iou > 0:
                 cover_count += 1
@@ -1008,19 +1010,23 @@ def _get_layout_property(
                     match_block_with_threshold_indexes.append(
                         (j, match_block_iou),
                     )
+                # elif max_iou > other_layout_threshold: # centered text
+                #     other_layout_threshold_count += 1
+
                 x_min_i = x_match_max
                 if x_min_i >= x_max_i:
                     break
 
         if (
-            layout_length > median_width * 1.3
-            and (cover_with_threshold_count >= 2 or cover_count >= 2)
+            layout_length > median_width * 1.3 and cover_count >= 2
         ) or layout_length > 0.6 * page_width:
             # if layout_length > median_width * 1.3 and (cover_with_threshold_count >= 2):
             block["layout"] = "double"
             double_label_area += (block["block_bbox"][2] - block["block_bbox"][0]) * (
                 block["block_bbox"][3] - block["block_bbox"][1]
             )
+        # elif other_layout_threshold_count >= 2:
+        #     block["layout"] = "other"
         else:
             block["layout"] = "single"
             check_single_layout[i] = match_block_with_threshold_indexes
@@ -1105,7 +1111,16 @@ def _get_sub_category(
     vision_labels = ["image", "table", "chart", "figure"]
     vision_title_labels = ["figure_title", "chart_title", "table_title"]
     all_labels = title_labels + sub_title_labels + vision_labels + vision_title_labels
-    special_pre_cut_labels = title_labels + sub_title_labels
+    special_pre_cut_labels = sub_title_labels
+
+    # single doc title is irregular,pre cut not applicable
+    num_doc_title = 0
+    for block in blocks:
+        if block["block_label"] == "doc_title":
+            num_doc_title += 1
+            if num_doc_title == 2:
+                special_pre_cut_labels = title_labels + sub_title_labels
+                break
 
     min_x = min(block["block_bbox"][0] for block in blocks)
     min_y = min(block["block_bbox"][1] for block in blocks)
@@ -1390,6 +1405,9 @@ def _get_sub_category(
 def get_layout_ordering(
     parsing_res_list: List[Dict[str, Any]],
     no_mask_labels: List[str] = [],
+    is_only_xycut=False,
+    is_add_mgs=True,
+    is_add_cmm=False,
 ) -> None:
     """
     Process layout parsing results to remove overlapping bounding boxes
@@ -1415,99 +1433,151 @@ def get_layout_ordering(
     parsing_res_list, pre_cuts = _get_sub_category(parsing_res_list, title_text_labels)
 
     parsing_res_by_pre_cuts_list = []
-    if len(pre_cuts) > 0:
-        block_bboxes = [block["block_bbox"] for block in parsing_res_list]
-        for axis, cuts in pre_cuts.items():
-            axis_index = 1 if axis == "y" else 0
 
-            max_val = max(bbox[axis_index + 2] for bbox in block_bboxes)
-
-            intervals = []
-            prev = 0
-            for cut in sorted(cuts):
-                intervals.append((prev, cut))
-                prev = cut
-            intervals.append((prev, max_val))
-
-            for start, end in intervals:
-                mask = [
-                    (bbox[axis_index] >= start) and (bbox[axis_index] < end)
-                    for bbox in block_bboxes
-                ]
-                parsing_res_by_pre_cuts_list.append(
-                    [parsing_res_list[i] for i, m in enumerate(mask) if m]
-                )
-    else:
+    if is_only_xycut or is_add_mgs == False:
         parsing_res_by_pre_cuts_list = [parsing_res_list]
+    else:
+        if len(pre_cuts) > 0:
+            block_bboxes = [block["block_bbox"] for block in parsing_res_list]
+            for axis, cuts in pre_cuts.items():
+                axis_index = 1 if axis == "y" else 0
+
+                max_val = max(bbox[axis_index + 2] for bbox in block_bboxes)
+
+                intervals = []
+                prev = 0
+                for cut in sorted(cuts):
+                    intervals.append((prev, cut))
+                    prev = cut
+                intervals.append((prev, max_val))
+
+                for start, end in intervals:
+                    parsing_res_by_pre_cuts = []
+                    for idx, bbox in enumerate(block_bboxes):
+                        if (bbox[axis_index] >= start) and (bbox[axis_index] < end):
+                            parsing_res_by_pre_cuts.append(parsing_res_list[idx])
+                    parsing_res_by_pre_cuts_list.append(parsing_res_by_pre_cuts)
+        else:
+            parsing_res_by_pre_cuts_list = [parsing_res_list]
 
     final_parsing_res_list = []
     num_index = 0
     num_sub_index = 0
     for parsing_res_by_pre_cuts in parsing_res_by_pre_cuts_list:
 
-        doc_flag = False
-        median_width = _get_text_median_width(parsing_res_by_pre_cuts)
-        parsing_res_by_pre_cuts, projection_direction = _get_layout_property(
-            parsing_res_by_pre_cuts,
-            median_width,
-            no_mask_labels=no_mask_labels,
-            threshold=0.3,
-        )
-        # Convert bounding boxes to float and remove overlaps
-        (
-            double_text_blocks,
-            title_text_blocks,
-            title_blocks,
-            vision_blocks,
-            vision_title_blocks,
-            vision_footnote_blocks,
-            other_blocks,
-        ) = ([], [], [], [], [], [], [])
+        # use mask
+        if is_only_xycut == False:
+            doc_flag = False
+            median_width = _get_text_median_width(parsing_res_by_pre_cuts)
+            parsing_res_by_pre_cuts, projection_direction = _get_layout_property(
+                parsing_res_by_pre_cuts,
+                median_width,
+                no_mask_labels=no_mask_labels,
+                threshold=0.3,
+            )
+            # Convert bounding boxes to float and remove overlaps
+            (
+                double_text_blocks,
+                other_text_blocks,
+                title_text_blocks,
+                title_blocks,
+                vision_blocks,
+                vision_title_blocks,
+                vision_footnote_blocks,
+                other_blocks,
+            ) = ([], [], [], [], [], [], [], [])
 
-        drop_indexes = []
+            drop_indexes = []
 
-        for index, block in enumerate(parsing_res_by_pre_cuts):
-            label = block["sub_label"]
-            block["block_bbox"] = list(map(int, block["block_bbox"]))
+            for index, block in enumerate(parsing_res_by_pre_cuts):
+                label = block["sub_label"]
+                block["block_bbox"] = list(map(int, block["block_bbox"]))
 
-            if label == "doc_title":
-                doc_flag = True
+                # use mask and add mgs
+                if is_add_mgs:
+                    if label == "doc_title":
+                        doc_flag = True
 
-            if label in no_mask_labels:
-                if block["layout"] == "double":
-                    double_text_blocks.append(block)
-                    drop_indexes.append(index)
-            elif label == "title_text":
-                title_text_blocks.append(block)
-                drop_indexes.append(index)
-            elif label == "vision_footnote":
-                vision_footnote_blocks.append(block)
-                drop_indexes.append(index)
-            elif label in vision_title_labels:
-                vision_title_blocks.append(block)
-                drop_indexes.append(index)
-            elif label in title_labels:
-                title_blocks.append(block)
-                drop_indexes.append(index)
-            elif label in vision_labels:
-                vision_blocks.append(block)
-                drop_indexes.append(index)
+                    if label in no_mask_labels:
+                        if block["layout"] == "double":
+                            double_text_blocks.append(block)
+                            drop_indexes.append(index)
+                        # elif block["layout"] == "other":
+                        #     other_text_blocks.append(block)
+                        #     drop_indexes.append(index)
+                    elif label == "title_text":
+                        title_text_blocks.append(block)
+                        drop_indexes.append(index)
+                    elif label == "vision_footnote":
+                        vision_footnote_blocks.append(block)
+                        drop_indexes.append(index)
+                    elif label in vision_title_labels:
+                        vision_title_blocks.append(block)
+                        drop_indexes.append(index)
+                    elif label in title_labels:
+                        title_blocks.append(block)
+                        drop_indexes.append(index)
+                    elif label in vision_labels:
+                        vision_blocks.append(block)
+                        drop_indexes.append(index)
+                    else:
+                        other_blocks.append(block)
+                        drop_indexes.append(index)
+                # use mask and no mgs
+                else:
+                    if label not in no_mask_labels:
+                        other_blocks.append(block)
+                        drop_indexes.append(index)
+
+            for index in sorted(drop_indexes, reverse=True):
+                del parsing_res_by_pre_cuts[index]
+
+            # use mask and use mgs
+            if is_add_mgs:
+                if len(parsing_res_by_pre_cuts) > 0:
+                    # single text label
+                    if (
+                        len(double_text_blocks) > len(parsing_res_by_pre_cuts)
+                        or projection_direction
+                    ):
+                        parsing_res_by_pre_cuts.extend(
+                            title_blocks + double_text_blocks
+                        )
+                        title_blocks = []
+                        double_text_blocks = []
+                        block_bboxes = [
+                            block["block_bbox"] for block in parsing_res_by_pre_cuts
+                        ]
+                        block_bboxes.sort(
+                            key=lambda x: (
+                                x[0] // max(20, median_width),
+                                x[1],
+                            ),
+                        )
+                        block_bboxes = np.array(block_bboxes)
+                        sorted_indices = sort_by_xycut(
+                            block_bboxes, direction=1, min_gap=1
+                        )
+                    else:
+                        block_bboxes = [
+                            block["block_bbox"] for block in parsing_res_by_pre_cuts
+                        ]
+                        block_bboxes.sort(key=lambda x: (x[0] // 20, x[1]))
+                        block_bboxes = np.array(block_bboxes)
+                        sorted_indices = sort_by_xycut(
+                            block_bboxes, direction=0, min_gap=20
+                        )
+                    # get index
+                    sorted_boxes = block_bboxes[sorted_indices].tolist()
+                    for block in parsing_res_by_pre_cuts:
+                        block["index"] = (
+                            num_index + sorted_boxes.index(block["block_bbox"]) + 1
+                        )
+                        block["sub_index"] = (
+                            num_sub_index + sorted_boxes.index(block["block_bbox"]) + 1
+                        )
+            # use mask and no mgs
             else:
-                other_blocks.append(block)
-                drop_indexes.append(index)
-
-        for index in sorted(drop_indexes, reverse=True):
-            del parsing_res_by_pre_cuts[index]
-
-        if len(parsing_res_by_pre_cuts) > 0:
-            # single text label
-            if (
-                len(double_text_blocks) > len(parsing_res_by_pre_cuts)
-                or projection_direction
-            ):
-                parsing_res_by_pre_cuts.extend(title_blocks + double_text_blocks)
-                title_blocks = []
-                double_text_blocks = []
                 block_bboxes = [
                     block["block_bbox"] for block in parsing_res_by_pre_cuts
                 ]
@@ -1519,13 +1589,317 @@ def get_layout_ordering(
                 )
                 block_bboxes = np.array(block_bboxes)
                 sorted_indices = sort_by_xycut(block_bboxes, direction=1, min_gap=1)
+                # get index
+                sorted_boxes = block_bboxes[sorted_indices].tolist()
+                for block in parsing_res_by_pre_cuts:
+                    block["index"] = (
+                        num_index + sorted_boxes.index(block["block_bbox"]) + 1
+                    )
+                    block["sub_index"] = (
+                        num_sub_index + sorted_boxes.index(block["block_bbox"]) + 1
+                    )
+
+            def nearest_match_(
+                input_blocks, distance_type="manhattan", is_add_index=True
+            ):
+                for block in input_blocks:
+                    bbox = block["block_bbox"]
+                    min_distance = float("inf")
+                    min_distance_config = [
+                        [float("inf"), float("inf")],
+                        float("inf"),
+                        float("inf"),
+                    ]  # for double text
+                    nearest_gt_index = 0
+                    for match_block in parsing_res_by_pre_cuts:
+                        match_bbox = match_block["block_bbox"]
+                        if distance_type == "nearest_iou_edge_distance":
+                            distance, min_distance_config = _nearest_iou_edge_distance(
+                                bbox,
+                                match_bbox,
+                                block["sub_label"],
+                                vision_labels=vision_labels,
+                                no_mask_labels=no_mask_labels,
+                                median_width=median_width,
+                                title_labels=title_labels,
+                                title_text=block["title_text"],
+                                sub_title=block["sub_title"],
+                                min_distance_config=min_distance_config,
+                                tolerance_len=10,
+                            )
+                        elif distance_type == "title_text":
+                            if (
+                                match_block["block_label"]
+                                in title_labels + ["abstract"]
+                                and match_block["title_text"] != []
+                            ):
+                                iou_left_up = (
+                                    _calculate_overlap_area_div_minbox_area_ratio(
+                                        bbox,
+                                        match_block["title_text"][0][1],
+                                    )
+                                )
+                                iou_right_down = (
+                                    _calculate_overlap_area_div_minbox_area_ratio(
+                                        bbox,
+                                        match_block["title_text"][-1][1],
+                                    )
+                                )
+                                iou = 1 - max(iou_left_up, iou_right_down)
+                                distance = _manhattan_distance(bbox, match_bbox) * iou
+                            else:
+                                distance = float("inf")
+                        elif distance_type == "manhattan":
+                            distance = _manhattan_distance(bbox, match_bbox)
+                        elif distance_type == "vision_footnote":
+                            if (
+                                match_block["block_label"] in vision_labels
+                                and match_block["vision_footnote"] != []
+                            ):
+                                iou_left_up = (
+                                    _calculate_overlap_area_div_minbox_area_ratio(
+                                        bbox,
+                                        match_block["vision_footnote"][0],
+                                    )
+                                )
+                                iou_right_down = (
+                                    _calculate_overlap_area_div_minbox_area_ratio(
+                                        bbox,
+                                        match_block["vision_footnote"][-1],
+                                    )
+                                )
+                                iou = 1 - max(iou_left_up, iou_right_down)
+                                distance = _manhattan_distance(bbox, match_bbox) * iou
+                            else:
+                                distance = float("inf")
+                        elif distance_type == "vision_body":
+                            if (
+                                match_block["block_label"] in vision_title_labels
+                                and block["vision_footnote"] != []
+                            ):
+                                iou_left_up = (
+                                    _calculate_overlap_area_div_minbox_area_ratio(
+                                        match_bbox,
+                                        block["vision_footnote"][0],
+                                    )
+                                )
+                                iou_right_down = (
+                                    _calculate_overlap_area_div_minbox_area_ratio(
+                                        match_bbox,
+                                        block["vision_footnote"][-1],
+                                    )
+                                )
+                                iou = 1 - max(iou_left_up, iou_right_down)
+                                distance = _manhattan_distance(bbox, match_bbox) * iou
+                            else:
+                                distance = float("inf")
+                        else:
+                            raise NotImplementedError
+
+                        if distance < min_distance:
+                            min_distance = distance
+                            if is_add_index:
+                                nearest_gt_index = match_block.get("index", 999)
+                            else:
+                                nearest_gt_index = match_block.get("sub_index", 999)
+
+                    if is_add_index:
+                        block["index"] = nearest_gt_index
+                    else:
+                        block["sub_index"] = nearest_gt_index
+
+                    parsing_res_by_pre_cuts.append(block)
+
+            if is_add_cmm:
+                # label:double layout text
+                double_text_blocks.sort(
+                    key=lambda x: (
+                        x["block_bbox"][1] // 10,
+                        x["block_bbox"][0] // median_width,
+                        x["block_bbox"][1] ** 2 + x["block_bbox"][0] ** 2,
+                    ),
+                )
+                nearest_match_(
+                    double_text_blocks,
+                    distance_type="nearest_iou_edge_distance",
+                )
+                parsing_res_by_pre_cuts.sort(
+                    key=lambda x: (x["index"], x["block_bbox"][1], x["block_bbox"][0]),
+                )
+
+                for idx, block in enumerate(parsing_res_by_pre_cuts):
+                    block["index"] = num_index + idx + 1
+                    block["sub_index"] = num_sub_index + idx + 1
+
+                # label:doc_title , paragraph_title
+                title_blocks.sort(
+                    key=lambda x: (
+                        x["block_bbox"][1] // 10,
+                        x["block_bbox"][0] // median_width,
+                        x["block_bbox"][1] ** 2 + x["block_bbox"][0] ** 2,
+                    ),
+                )
+                nearest_match_(title_blocks, distance_type="nearest_iou_edge_distance")
+
+                if doc_flag:
+                    text_sort_labels = ["doc_title"]
+                    text_label_priority = {
+                        label: priority
+                        for priority, label in enumerate(text_sort_labels)
+                    }
+                    doc_titles = []
+                    for i, block in enumerate(parsing_res_by_pre_cuts):
+                        if block["block_label"] == "doc_title":
+                            doc_titles.append(
+                                (i, block["block_bbox"][1], block["block_bbox"][0]),
+                            )
+                    doc_titles.sort(key=lambda x: (x[1], x[2]))
+                    first_doc_title_index = doc_titles[0][0]
+                    parsing_res_by_pre_cuts[first_doc_title_index]["index"] = 1
+                    parsing_res_by_pre_cuts.sort(
+                        key=lambda x: (
+                            x["index"],
+                            text_label_priority.get(x["block_label"], 9999),
+                            x["block_bbox"][1],
+                            x["block_bbox"][0],
+                        ),
+                    )
+                else:
+                    parsing_res_by_pre_cuts.sort(
+                        key=lambda x: (
+                            x["index"],
+                            x["block_bbox"][1],
+                            x["block_bbox"][0],
+                        ),
+                    )
+
+                for idx, block in enumerate(parsing_res_by_pre_cuts):
+                    block["index"] = num_index + idx + 1
+                    block["sub_index"] = num_sub_index + idx + 1
+
+                # label:other layout text
+                # other_text_blocks.sort(
+                #     key=lambda x: (
+                #         x["block_bbox"][1] // 10,
+                #         x["block_bbox"][0] // median_width,
+                #         x["block_bbox"][1] ** 2 + x["block_bbox"][0] ** 2,
+                #     ),
+                # )
+                # nearest_match_(
+                #     double_text_blocks,
+                #     distance_type="nearest_iou_edge_distance",
+                # )
+                # parsing_res_by_pre_cuts.sort(
+                #     key=lambda x: (x["index"], x["block_bbox"][1], x["block_bbox"][0]),
+                # )
+
+                # for idx, block in enumerate(parsing_res_by_pre_cuts):
+                #     block["index"] = num_index + idx + 1
+                #     block["sub_index"] = num_sub_index + idx + 1
+
+                # label:title-text
+                nearest_match_(title_text_blocks, distance_type="title_text")
+
+                def hor_tb_and_ver_lr(x, label):
+                    input_bbox = x["block_bbox"]
+                    is_horizontal = _get_bbox_direction(input_bbox)
+
+                    if is_horizontal:
+                        return input_bbox[1]
+                    else:
+                        return -1 if label == "doc_title" else input_bbox[0]
+
+                parsing_res_by_pre_cuts.sort(
+                    key=lambda x: (x["index"], hor_tb_and_ver_lr(x, x["block_label"])),
+                )
+
+                for idx, block in enumerate(parsing_res_by_pre_cuts):
+                    block["index"] = num_index + idx + 1
+                    block["sub_index"] = num_sub_index + idx + 1
+
+                # label:image,figure,chart,seal
+                nearest_match_(
+                    vision_blocks,
+                    distance_type="nearest_iou_edge_distance",
+                    is_add_index=False,
+                )
+                parsing_res_by_pre_cuts.sort(
+                    key=lambda x: (
+                        x["sub_index"],
+                        x["block_bbox"][1],
+                        x["block_bbox"][0],
+                    ),
+                )
+
+                for idx, block in enumerate(parsing_res_by_pre_cuts):
+                    block["sub_index"] = num_sub_index + idx + 1
+
+                # label:image,figure,chart,seal title
+                nearest_match_(
+                    vision_title_blocks,
+                    distance_type="nearest_iou_edge_distance",
+                    is_add_index=False,
+                )
+                parsing_res_by_pre_cuts.sort(
+                    key=lambda x: (
+                        x["sub_index"],
+                        x["block_bbox"][1],
+                        x["block_bbox"][0],
+                    ),
+                )
+
+                for idx, block in enumerate(parsing_res_by_pre_cuts):
+                    block["sub_index"] = num_sub_index + idx + 1
+
+                # label:vision footnote
+                nearest_match_(
+                    vision_footnote_blocks,
+                    distance_type="vision_footnote",
+                    is_add_index=False,
+                )
+                text_label_priority = {"vision_footnote": 9999}
+                parsing_res_by_pre_cuts.sort(
+                    key=lambda x: (
+                        x["sub_index"],
+                        text_label_priority.get(x["sub_label"], 0),
+                        x["block_bbox"][1],
+                        x["block_bbox"][0],
+                    ),
+                )
+
+                for idx, block in enumerate(parsing_res_by_pre_cuts):
+                    block["sub_index"] = num_sub_index + idx + 1
+
+                # label:header、footnote、header_image...
+                nearest_match_(
+                    other_blocks, distance_type="manhattan", is_add_index=False
+                )
+
+            # use mask and (mgs) and no cmm
             else:
-                block_bboxes = [
-                    block["block_bbox"] for block in parsing_res_by_pre_cuts
-                ]
-                block_bboxes.sort(key=lambda x: (x[0] // 20, x[1]))
-                block_bboxes = np.array(block_bboxes)
-                sorted_indices = sort_by_xycut(block_bboxes, direction=0, min_gap=20)
+                if is_add_mgs:
+                    all_blocks = double_text_blocks + title_text_blocks + title_blocks
+                else:
+                    all_blocks = other_blocks
+                nearest_match_(all_blocks, distance_type="manhattan", is_add_index=True)
+
+                parsing_res_by_pre_cuts.sort(
+                    key=lambda x: (
+                        x["index"],
+                        x["block_bbox"][1],
+                        x["block_bbox"][0],
+                    ),
+                )
+
+                for idx, block in enumerate(parsing_res_by_pre_cuts):
+                    block["index"] = num_index + idx + 1
+                    block["sub_index"] = num_sub_index + idx + 1
+
+        # only xycut:baseline
+        else:
+            block_bboxes = [block["block_bbox"] for block in parsing_res_by_pre_cuts]
+            block_bboxes = np.array(block_bboxes)
+            sorted_indices = sort_by_xycut(block_bboxes, direction=1, min_gap=1)
 
             sorted_boxes = block_bboxes[sorted_indices].tolist()
 
@@ -1534,248 +1908,6 @@ def get_layout_ordering(
                 block["sub_index"] = (
                     num_sub_index + sorted_boxes.index(block["block_bbox"]) + 1
                 )
-
-        def nearest_match_(input_blocks, distance_type="manhattan", is_add_index=True):
-            for block in input_blocks:
-                bbox = block["block_bbox"]
-                min_distance = float("inf")
-                min_distance_config = [
-                    [float("inf"), float("inf")],
-                    float("inf"),
-                    float("inf"),
-                ]  # for double text
-                nearest_gt_index = 0
-                for match_block in parsing_res_by_pre_cuts:
-                    match_bbox = match_block["block_bbox"]
-                    if distance_type == "nearest_iou_edge_distance":
-                        distance, min_distance_config = _nearest_iou_edge_distance(
-                            bbox,
-                            match_bbox,
-                            block["sub_label"],
-                            vision_labels=vision_labels,
-                            no_mask_labels=no_mask_labels,
-                            median_width=median_width,
-                            title_labels=title_labels,
-                            title_text=block["title_text"],
-                            sub_title=block["sub_title"],
-                            min_distance_config=min_distance_config,
-                            tolerance_len=10,
-                        )
-                    elif distance_type == "title_text":
-                        if (
-                            match_block["block_label"] in title_labels + ["abstract"]
-                            and match_block["title_text"] != []
-                        ):
-                            iou_left_up = _calculate_overlap_area_div_minbox_area_ratio(
-                                bbox,
-                                match_block["title_text"][0][1],
-                            )
-                            iou_right_down = (
-                                _calculate_overlap_area_div_minbox_area_ratio(
-                                    bbox,
-                                    match_block["title_text"][-1][1],
-                                )
-                            )
-                            iou = 1 - max(iou_left_up, iou_right_down)
-                            distance = _manhattan_distance(bbox, match_bbox) * iou
-                        else:
-                            distance = float("inf")
-                    elif distance_type == "manhattan":
-                        distance = _manhattan_distance(bbox, match_bbox)
-                    elif distance_type == "vision_footnote":
-                        if (
-                            match_block["block_label"] in vision_labels
-                            and match_block["vision_footnote"] != []
-                        ):
-                            iou_left_up = _calculate_overlap_area_div_minbox_area_ratio(
-                                bbox,
-                                match_block["vision_footnote"][0],
-                            )
-                            iou_right_down = (
-                                _calculate_overlap_area_div_minbox_area_ratio(
-                                    bbox,
-                                    match_block["vision_footnote"][-1],
-                                )
-                            )
-                            iou = 1 - max(iou_left_up, iou_right_down)
-                            distance = _manhattan_distance(bbox, match_bbox) * iou
-                        else:
-                            distance = float("inf")
-                    elif distance_type == "vision_body":
-                        if (
-                            match_block["block_label"] in vision_title_labels
-                            and block["vision_footnote"] != []
-                        ):
-                            iou_left_up = _calculate_overlap_area_div_minbox_area_ratio(
-                                match_bbox,
-                                block["vision_footnote"][0],
-                            )
-                            iou_right_down = (
-                                _calculate_overlap_area_div_minbox_area_ratio(
-                                    match_bbox,
-                                    block["vision_footnote"][-1],
-                                )
-                            )
-                            iou = 1 - max(iou_left_up, iou_right_down)
-                            distance = _manhattan_distance(bbox, match_bbox) * iou
-                        else:
-                            distance = float("inf")
-                    else:
-                        raise NotImplementedError
-
-                    if distance < min_distance:
-                        min_distance = distance
-                        if is_add_index:
-                            nearest_gt_index = match_block.get("index", 999)
-                        else:
-                            nearest_gt_index = match_block.get("sub_index", 999)
-
-                if is_add_index:
-                    block["index"] = nearest_gt_index
-                else:
-                    block["sub_index"] = nearest_gt_index
-
-                parsing_res_by_pre_cuts.append(block)
-
-        # double text label
-        double_text_blocks.sort(
-            key=lambda x: (
-                x["block_bbox"][1] // 10,
-                x["block_bbox"][0] // median_width,
-                x["block_bbox"][1] ** 2 + x["block_bbox"][0] ** 2,
-            ),
-        )
-        nearest_match_(
-            double_text_blocks,
-            distance_type="nearest_iou_edge_distance",
-        )
-        parsing_res_by_pre_cuts.sort(
-            key=lambda x: (x["index"], x["block_bbox"][1], x["block_bbox"][0]),
-        )
-
-        for idx, block in enumerate(parsing_res_by_pre_cuts):
-            block["index"] = num_index + idx + 1
-            block["sub_index"] = num_sub_index + idx + 1
-
-        # title label
-        title_blocks.sort(
-            key=lambda x: (
-                x["block_bbox"][1] // 10,
-                x["block_bbox"][0] // median_width,
-                x["block_bbox"][1] ** 2 + x["block_bbox"][0] ** 2,
-            ),
-        )
-        nearest_match_(title_blocks, distance_type="nearest_iou_edge_distance")
-
-        if doc_flag:
-            text_sort_labels = ["doc_title"]
-            text_label_priority = {
-                label: priority for priority, label in enumerate(text_sort_labels)
-            }
-            doc_titles = []
-            for i, block in enumerate(parsing_res_by_pre_cuts):
-                if block["block_label"] == "doc_title":
-                    doc_titles.append(
-                        (i, block["block_bbox"][1], block["block_bbox"][0]),
-                    )
-            doc_titles.sort(key=lambda x: (x[1], x[2]))
-            first_doc_title_index = doc_titles[0][0]
-            parsing_res_by_pre_cuts[first_doc_title_index]["index"] = 1
-            parsing_res_by_pre_cuts.sort(
-                key=lambda x: (
-                    x["index"],
-                    text_label_priority.get(x["block_label"], 9999),
-                    x["block_bbox"][1],
-                    x["block_bbox"][0],
-                ),
-            )
-        else:
-            parsing_res_by_pre_cuts.sort(
-                key=lambda x: (
-                    x["index"],
-                    x["block_bbox"][1],
-                    x["block_bbox"][0],
-                ),
-            )
-
-        for idx, block in enumerate(parsing_res_by_pre_cuts):
-            block["index"] = num_index + idx + 1
-            block["sub_index"] = num_sub_index + idx + 1
-
-        # title-text label
-        nearest_match_(title_text_blocks, distance_type="title_text")
-
-        def hor_tb_and_ver_lr(x):
-            input_bbox = x["block_bbox"]
-            is_horizontal = _get_bbox_direction(input_bbox)
-            if is_horizontal:
-                return input_bbox[1]
-            else:
-                return input_bbox[0]
-
-        parsing_res_by_pre_cuts.sort(
-            key=lambda x: (x["index"], hor_tb_and_ver_lr(x)),
-        )
-
-        for idx, block in enumerate(parsing_res_by_pre_cuts):
-            block["index"] = num_index + idx + 1
-            block["sub_index"] = num_sub_index + idx + 1
-
-        # image,figure,chart,seal label
-        nearest_match_(
-            vision_blocks,
-            distance_type="nearest_iou_edge_distance",
-            is_add_index=False,
-        )
-        parsing_res_by_pre_cuts.sort(
-            key=lambda x: (
-                x["sub_index"],
-                x["block_bbox"][1],
-                x["block_bbox"][0],
-            ),
-        )
-
-        for idx, block in enumerate(parsing_res_by_pre_cuts):
-            block["sub_index"] = num_sub_index + idx + 1
-
-        # image,figure,chart,seal title label
-        nearest_match_(
-            vision_title_blocks,
-            distance_type="nearest_iou_edge_distance",
-            is_add_index=False,
-        )
-        parsing_res_by_pre_cuts.sort(
-            key=lambda x: (
-                x["sub_index"],
-                x["block_bbox"][1],
-                x["block_bbox"][0],
-            ),
-        )
-
-        for idx, block in enumerate(parsing_res_by_pre_cuts):
-            block["sub_index"] = num_sub_index + idx + 1
-
-        # vision footnote label
-        nearest_match_(
-            vision_footnote_blocks,
-            distance_type="vision_footnote",
-            is_add_index=False,
-        )
-        text_label_priority = {"vision_footnote": 9999}
-        parsing_res_by_pre_cuts.sort(
-            key=lambda x: (
-                x["sub_index"],
-                text_label_priority.get(x["sub_label"], 0),
-                x["block_bbox"][1],
-                x["block_bbox"][0],
-            ),
-        )
-
-        for idx, block in enumerate(parsing_res_by_pre_cuts):
-            block["sub_index"] = num_sub_index + idx + 1
-
-        # header、footnote、header_image... label
-        nearest_match_(other_blocks, distance_type="manhattan", is_add_index=False)
 
         # add all parsing result
         final_parsing_res_list.extend(parsing_res_by_pre_cuts)
