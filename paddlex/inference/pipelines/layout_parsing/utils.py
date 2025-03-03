@@ -1407,7 +1407,10 @@ def get_layout_ordering(
     no_mask_labels: List[str] = [],
     is_only_xycut=False,
     is_add_mgs=True,
-    is_add_cmm=False,
+    is_add_cmm=True,
+    is_use_adaptive_scheme=True,
+    is_add_pre_cut=True,
+    is_single_stage=False,
 ) -> None:
     """
     Process layout parsing results to remove overlapping bounding boxes
@@ -1434,7 +1437,7 @@ def get_layout_ordering(
 
     parsing_res_by_pre_cuts_list = []
 
-    if is_only_xycut or is_add_mgs == False:
+    if is_only_xycut or is_add_mgs == False or is_add_pre_cut == False:
         parsing_res_by_pre_cuts_list = [parsing_res_list]
     else:
         if len(pre_cuts) > 0:
@@ -1502,6 +1505,7 @@ def get_layout_ordering(
                         if block["layout"] == "double":
                             double_text_blocks.append(block)
                             drop_indexes.append(index)
+
                         # elif block["layout"] == "other":
                         #     other_text_blocks.append(block)
                         #     drop_indexes.append(index)
@@ -1536,7 +1540,7 @@ def get_layout_ordering(
             if is_add_mgs:
                 if len(parsing_res_by_pre_cuts) > 0:
                     # single text label
-                    if (
+                    if is_use_adaptive_scheme and (
                         len(double_text_blocks) > len(parsing_res_by_pre_cuts)
                         or projection_direction
                     ):
@@ -1710,7 +1714,7 @@ def get_layout_ordering(
 
                     parsing_res_by_pre_cuts.append(block)
 
-            if is_add_cmm:
+            if is_add_cmm and is_single_stage == False:
                 # label:double layout text
                 double_text_blocks.sort(
                     key=lambda x: (
@@ -1875,13 +1879,23 @@ def get_layout_ordering(
                     other_blocks, distance_type="manhattan", is_add_index=False
                 )
 
-            # use mask and (mgs) and no cmm
+            # use mask and (mgs) and (no cmm or is_single_stage=True)
             else:
                 if is_add_mgs:
                     all_blocks = double_text_blocks + title_text_blocks + title_blocks
                 else:
                     all_blocks = other_blocks
-                nearest_match_(all_blocks, distance_type="manhattan", is_add_index=True)
+
+                if is_add_cmm and is_single_stage:
+                    nearest_match_(
+                        all_blocks,
+                        distance_type="nearest_iou_edge_distance",
+                        is_add_index=True,
+                    )
+                else:
+                    nearest_match_(
+                        all_blocks, distance_type="manhattan", is_add_index=True
+                    )
 
                 parsing_res_by_pre_cuts.sort(
                     key=lambda x: (
@@ -2261,6 +2275,8 @@ def _nearest_iou_edge_distance(
 
     # Calculate edge distance
     weight = _get_weights(label, horizontal1)
+    # static weight
+    # weight = [1.,1.,1.,1.]
     if label == "abstract":
         tolerance_len *= 2
 
@@ -2276,6 +2292,8 @@ def _nearest_iou_edge_distance(
 
     # Weights for combining distances
     iou_edge_weight = [10**8, 10**4, 1, 0.0001]
+    # static weight
+    # iou_edge_weight = [1**6,1**3,1.,1**-3]
 
     # Calculate up and left edge distances
     up_edge_distance = y1_prime
@@ -2297,6 +2315,10 @@ def _nearest_iou_edge_distance(
         + up_edge_distance * iou_edge_weight[2]
         + left_edge_distance * iou_edge_weight[3]
     )
+    # distance = iou_distance
+    # distance = edge_distance
+    # distance =  up_edge_distance
+    # distance =  left_edge_distance
 
     # Update minimum distance configuration if a smaller distance is found
     if total_distance > distance:
