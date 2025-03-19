@@ -312,6 +312,9 @@ def _sort_ocr_res_by_y_projection(
         Dict[str, List[Any]]: A dictionary with the same structure as `ocr_res`, but with boxes and texts sorted
                               and grouped into lines and blocks.
     """
+    if len(ocr_res["boxes"]) == 0:
+        return {}
+
     assert (
         ocr_res["boxes"] and ocr_res["rec_texts"]
     ), "OCR results must contain 'boxes' and 'rec_texts'"
@@ -1106,6 +1109,8 @@ def _get_sub_category(
         List[Dict[str, Any]]: Updated list of blocks with title-text layout information.
         Dict[float]: Dict of pre_cuts coordinates.
     """
+    if len(blocks) == 0:
+        return blocks, {}
 
     sub_title_labels = ["paragraph_title"]
     vision_labels = ["image", "table", "chart", "figure"]
@@ -1911,17 +1916,22 @@ def get_layout_ordering(
 
         # only xycut:baseline
         else:
-            block_bboxes = [block["block_bbox"] for block in parsing_res_by_pre_cuts]
-            block_bboxes = np.array(block_bboxes)
-            sorted_indices = sort_by_xycut(block_bboxes, direction=1, min_gap=1)
+            if len(parsing_res_by_pre_cuts) > 0:
+                block_bboxes = [
+                    block["block_bbox"] for block in parsing_res_by_pre_cuts
+                ]
+                block_bboxes = np.array(block_bboxes)
+                sorted_indices = sort_by_xycut(block_bboxes, direction=1, min_gap=1)
 
-            sorted_boxes = block_bboxes[sorted_indices].tolist()
+                sorted_boxes = block_bboxes[sorted_indices].tolist()
 
-            for block in parsing_res_by_pre_cuts:
-                block["index"] = num_index + sorted_boxes.index(block["block_bbox"]) + 1
-                block["sub_index"] = (
-                    num_sub_index + sorted_boxes.index(block["block_bbox"]) + 1
-                )
+                for block in parsing_res_by_pre_cuts:
+                    block["index"] = (
+                        num_index + sorted_boxes.index(block["block_bbox"]) + 1
+                    )
+                    block["sub_index"] = (
+                        num_sub_index + sorted_boxes.index(block["block_bbox"]) + 1
+                    )
 
         # add all parsing result
         final_parsing_res_list.extend(parsing_res_by_pre_cuts)
