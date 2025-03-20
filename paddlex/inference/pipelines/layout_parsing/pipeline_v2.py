@@ -234,6 +234,8 @@ class LayoutParsingPipelineV2(BasePipeline):
         text_det_box_thresh: Optional[float] = None,
         text_det_unclip_ratio: Optional[float] = None,
         text_rec_score_thresh: Optional[float] = None,
+        page_data=None,
+        page_index=-1,
     ) -> list:
         """
         Retrieves the layout parsing result based on the layout detection result, OCR result, and other recognition results.
@@ -340,6 +342,8 @@ class LayoutParsingPipelineV2(BasePipeline):
             layout_det_res=layout_det_res,
             table_res_list=table_res_list,
             seal_res_list=seal_res_list,
+            page_data=page_data,
+            page_index=page_index,
         )
 
         return parsing_res_list
@@ -422,6 +426,8 @@ class LayoutParsingPipelineV2(BasePipeline):
         seal_det_box_thresh: Union[float, None] = None,
         seal_det_unclip_ratio: Union[float, None] = None,
         seal_rec_score_thresh: Union[float, None] = None,
+        page_data=None,
+        page_index=-1,
         **kwargs,
     ) -> LayoutParsingResultV2:
         """
@@ -605,6 +611,8 @@ class LayoutParsingPipelineV2(BasePipeline):
                 text_det_box_thresh=text_det_box_thresh,
                 text_det_unclip_ratio=text_det_unclip_ratio,
                 text_rec_score_thresh=text_rec_score_thresh,
+                page_data=page_data,
+                page_index=page_index,
             )
 
             for formula_res in formula_res_list:

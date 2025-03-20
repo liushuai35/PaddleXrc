@@ -19,6 +19,7 @@ __all__ = [
     "recursive_img_array2path",
     "get_show_color",
     "sorted_layout_boxes",
+    "direct_test",
 ]
 
 import numpy as np
@@ -425,6 +426,8 @@ def get_single_block_parsing_res(
     layout_det_res: DetResult,
     table_res_list: list,
     seal_res_list: list,
+    page_data: dict,
+    page_index: int = -1,
 ) -> OCRResult:
     """
     Extract structured information from OCR and layout detection results.
@@ -547,6 +550,9 @@ def get_single_block_parsing_res(
                         "seg_end_flag": seg_end_flag,
                     },
                 )
+
+    if page_index != -1:
+        single_block_layout_parsing_res = page_data[page_index]["parse_results"]
 
     single_block_layout_parsing_res = get_layout_ordering(
         single_block_layout_parsing_res,
@@ -994,6 +1000,23 @@ def _get_layout_property(
         cover_count, cover_with_threshold_count, other_layout_threshold_count = 0, 0, 0
         match_block_with_threshold_indexes = []
 
+        has_left_text = False
+        has_right_text = False
+        x1, y1, x2, y2 = block["block_bbox"]
+        for j, block2 in enumerate(blocks):
+            if i == j or block2["block_label"] != "text":
+                continue
+            bbox2 = block2["block_bbox"]
+            x1_2, y1_2, x2_2, y2_2 = bbox2
+            if x2_2 <= x1 and not (y2_2 <= y1 or y1_2 >= y2):
+                has_left_text = True
+            if x1_2 >= x2 and not (y2_2 <= y1 or y1_2 >= y2):
+                has_right_text = True
+            if has_left_text or has_right_text:
+                break
+        no_text_on_sides = not (has_left_text or has_right_text)
+        no_text_on_sides = True
+
         for j, other_block in enumerate(blocks):
             if i == j or other_block["block_label"] not in no_mask_labels:
                 continue
@@ -1020,9 +1043,13 @@ def _get_layout_property(
                 if x_min_i >= x_max_i:
                     break
 
-        if (
-            layout_length > median_width * 1.3 and cover_count >= 2
-        ) or layout_length > 0.6 * page_width:
+        if (layout_length > median_width * 1.3 and cover_count >= 2) or (
+            layout_length > 0.6 * page_width
+        ):
+            # ) or (layout_length > 0.6 * page_width and no_text_on_sides):
+            # if (
+            #     layout_length > median_width * 1.3 and cover_count >= 2
+            # ):
             # if layout_length > median_width * 1.3 and (cover_with_threshold_count >= 2):
             block["layout"] = "double"
             double_label_area += (block["block_bbox"][2] - block["block_bbox"][0]) * (
@@ -2378,3 +2405,53 @@ def get_show_color(label: str) -> Tuple:
     }
     default_color = (158, 158, 158, 100)
     return label_colors.get(label, default_color)
+
+
+def single_page_direct_test(page_data):
+    single_block_layout_parsing_res = get_layout_ordering(
+        page_data["parse_results"],
+        no_mask_labels=[
+            "text",
+            "formula",
+            "algorithm",
+            "reference",
+            "content",
+            "abstract",
+        ],
+    )
+    parsing_res_list = [
+        {
+            "block_label": parsing_res["block_label"],
+            "block_content": parsing_res["block_content"],
+            "block_bbox": parsing_res["block_bbox"],
+            "index": parsing_res.get("index", None),
+        }
+        for parsing_res in single_block_layout_parsing_res
+    ]
+    return {
+        "parsing_res_list": parsing_res_list,
+        "block_size": page_data["block_size"],
+        "page_idx": page_data["page_idx"],
+    }
+
+
+def direct_test(input_path, output_path):
+    import json
+
+    with open(input_path, "r", encoding="utf-8") as file:
+        data = json.load(file)
+
+    all_res = []
+    for page_data in data:
+        all_res.append(single_page_direct_test(page_data=page_data))
+
+    with open(output_path, "w", encoding="utf-8") as file:
+        json.dump(all_res, file, ensure_ascii=False, indent=4)
+
+
+if __name__ == "__main__":
+    key = "single_column"
+    direct_test(
+        f"/home/shuai.liu01/PaddleXrc/input_jsons/input_{key}.json",
+        f"/home/shuai.liu01/PaddleXrc/input_jsons/output_{key}.json",
+    )

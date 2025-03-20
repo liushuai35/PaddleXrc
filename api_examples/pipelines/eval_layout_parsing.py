@@ -15,6 +15,7 @@
 import numpy as np
 from nltk.translate.bleu_score import sentence_bleu
 from scipy.stats import kendalltau
+import Levenshtein
 
 
 def calculate_iou(box1, box2):
@@ -184,7 +185,7 @@ def calculate_metrics_with_block(
         input_bboxes, input_indices, gt_bboxes, gt_indices, iou_threshold=0.5
     )
     if len(sorted_gt_indices) == 0:
-        return 1, 0, 1
+        return 1, 0, 1, 0, 0
 
     if len(sorted_gt_indices) < 4 and sorted_gt_indices == sorted_matched_indices:
         bleu_score = 1
@@ -219,7 +220,9 @@ def calculate_metrics_with_block(
         if math.isnan(tau):
             tau = 0
 
-    return bleu_score, ard, tau
+    edit_dist = Levenshtein.distance(sorted_matched_indices, sorted_gt_indices)
+
+    return bleu_score, ard, tau, edit_dist, len(sorted_gt_indices)
 
 
 def calculate_metrics_with_page(
@@ -242,6 +245,8 @@ def calculate_metrics_with_page(
     total_ard = 0
     total_tau = 0
     total_match_block_num = 0
+    total_edit_dist = 0
+    total_length = 0
 
     if not is_order_match:
         for block in input_data:
@@ -257,13 +262,17 @@ def calculate_metrics_with_page(
                         input_indices = [index + 1 for index in input_indices]
                     if 0 in gt_indices:
                         gt_indices = [index + 1 for index in gt_indices]
-                    bleu_score, ard, tau = calculate_metrics_with_block(
-                        input_bboxes, input_indices, gt_bboxes, gt_indices
+                    bleu_score, ard, tau, edit_dist, length = (
+                        calculate_metrics_with_block(
+                            j, input_bboxes, input_indices, gt_bboxes, gt_indices
+                        )
                     )
                     total_bleu_score += bleu_score
                     total_ard += ard
                     total_tau += tau
+                    total_edit_dist += edit_dist
                     total_match_block_num += 1
+                    total_length += length
                     break
     else:
         bad_cases = []
@@ -276,7 +285,7 @@ def calculate_metrics_with_page(
                 input_indices = [index + 1 for index in input_indices]
             if 0 in gt_indices:
                 gt_indices = [index + 1 for index in gt_indices]
-            bleu_score, ard, tau = calculate_metrics_with_block(
+            bleu_score, ard, tau, edit_dist, length = calculate_metrics_with_block(
                 block_index, input_bboxes, input_indices, gt_bboxes, gt_indices
             )
             if bleu_score < 0.95:
@@ -284,12 +293,15 @@ def calculate_metrics_with_page(
             total_bleu_score += bleu_score
             total_ard += ard
             total_tau += tau
+            total_edit_dist += edit_dist
             total_match_block_num += 1
+            total_length += length
         print("bad cases:", bad_cases)
     return (
         total_bleu_score / total_match_block_num,
         total_ard / total_match_block_num,
         total_tau / total_match_block_num,
+        total_edit_dist / total_length,
     )
 
 
@@ -474,32 +486,37 @@ if __name__ == "__main__":
     import os
     import glob
 
-    num = 30
-    dir_name = "xycut"
+    num = 70
+    dir_name = "1andmore_column"
 
-    gt_data = load_data_from_json(
-        f"/home/shuai.liu01/PaddleXrc/api_examples/pipelines/all_gt/gt_{num}.json"
-    )
+    gt_data = load_data_from_json(f"/home/shuai.liu01/PaddleXrc/gt/gt_{dir_name}.json")
 
     # PaddleX
-    input_jsons = glob.glob(
-        f"/home/shuai.liu01/PaddleXrc/api_examples/pipelines/{dir_name}/{num}/*.json"
-    )
+    # input_jsons = glob.glob(
+    #     f"/home/shuai.liu01/PaddleXrc/api_examples/pipelines/output/{dir_name}/*.json"
+    # )
+    # input_jsons.sort(key=lambda x: int(os.path.basename(x).split("_")[2]))
+    # input_data = []
+    # for i, input_json in enumerate(input_jsons):
+    #     if i == len(gt_data):
+    #         break
+    #     data = load_data_from_json(input_json)
+    #     input_data.append(paddlex_generate_input_data(data, [gt_data[i]]))
 
-    input_jsons.sort(key=lambda x: int(os.path.basename(x).split("_")[1]))
+    input_json = f"/home/shuai.liu01/PaddleXrc/input_jsons/output_{dir_name}.json"
     input_data = []
-    for i, input_json in enumerate(input_jsons):
+    data = load_data_from_json(input_json)
+    for i, page_data in enumerate(data):
         if i == len(gt_data):
             break
-        data = load_data_from_json(input_json)
-        input_data.append(paddlex_generate_input_data(data, [gt_data[i]]))
+        input_data.append(paddlex_generate_input_data(page_data, [gt_data[i]]))
 
-    # MinerU
-    # data = load_data_from_json("/workspace/shuailiu35/eval_layout_order/70/mineru/input/input_middle.json")
+    # # MinerU
+    # data = load_data_from_json(f"/home/shuai.liu01/MinerU/{dir_name}_middle.json")
     # input_data = mineru_generate_input_data(data,gt_data)
 
-    bleu_score, ard, tau = calculate_metrics_with_page(input_data, gt_data)
-    print(f"BLEU score: {bleu_score}, ARD: {ard}, Tau :{tau}")
+    bleu_score, ard, tau, edit_dist = calculate_metrics_with_page(input_data, gt_data)
+    print(f"BLEU score: {bleu_score}, ARD: {ard}, Tau :{tau}, Edit_dist:{edit_dist}")
 
     # num_list = [30,70]
     # dir_list = ["all_gt"]
