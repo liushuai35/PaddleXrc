@@ -1043,7 +1043,7 @@ def _get_layout_property(
                 if x_min_i >= x_max_i:
                     break
 
-        if (layout_length > median_width * 1.3 and cover_count >= 2) or (
+        if ((layout_length > median_width * 1.3) and cover_count >= 2) or (
             layout_length > 0.6 * page_width
         ):
             # ) or (layout_length > 0.6 * page_width and no_text_on_sides):
@@ -1055,7 +1055,8 @@ def _get_layout_property(
             double_label_area += (block["block_bbox"][2] - block["block_bbox"][0]) * (
                 block["block_bbox"][3] - block["block_bbox"][1]
             )
-        # elif other_layout_threshold_count >= 2:
+        # elif layout_length < median_width* 0.5 and cover_count >= 2:
+        # # elif other_layout_threshold_count >= 2:
         #     block["layout"] = "other"
         else:
             block["layout"] = "single"
@@ -1538,9 +1539,9 @@ def get_layout_ordering(
                             double_text_blocks.append(block)
                             drop_indexes.append(index)
 
-                        # elif block["layout"] == "other":
-                        #     other_text_blocks.append(block)
-                        #     drop_indexes.append(index)
+                        elif block["layout"] == "other":
+                            other_text_blocks.append(block)
+                            drop_indexes.append(index)
                     elif label == "title_text":
                         title_text_blocks.append(block)
                         drop_indexes.append(index)
@@ -1814,24 +1815,24 @@ def get_layout_ordering(
                     block["sub_index"] = num_sub_index + idx + 1
 
                 # label:other layout text
-                # other_text_blocks.sort(
-                #     key=lambda x: (
-                #         x["block_bbox"][1] // 10,
-                #         x["block_bbox"][0] // median_width,
-                #         x["block_bbox"][1] ** 2 + x["block_bbox"][0] ** 2,
-                #     ),
-                # )
-                # nearest_match_(
-                #     double_text_blocks,
-                #     distance_type="nearest_iou_edge_distance",
-                # )
-                # parsing_res_by_pre_cuts.sort(
-                #     key=lambda x: (x["index"], x["block_bbox"][1], x["block_bbox"][0]),
-                # )
+                other_text_blocks.sort(
+                    key=lambda x: (
+                        x["block_bbox"][1] // 10,
+                        x["block_bbox"][0] // median_width,
+                        x["block_bbox"][1] ** 2 + x["block_bbox"][0] ** 2,
+                    ),
+                )
+                nearest_match_(
+                    double_text_blocks,
+                    distance_type="nearest_iou_edge_distance",
+                )
+                parsing_res_by_pre_cuts.sort(
+                    key=lambda x: (x["index"], x["block_bbox"][1], x["block_bbox"][0]),
+                )
 
-                # for idx, block in enumerate(parsing_res_by_pre_cuts):
-                #     block["index"] = num_index + idx + 1
-                #     block["sub_index"] = num_sub_index + idx + 1
+                for idx, block in enumerate(parsing_res_by_pre_cuts):
+                    block["index"] = num_index + idx + 1
+                    block["sub_index"] = num_sub_index + idx + 1
 
                 # label:title-text
                 nearest_match_(title_text_blocks, distance_type="title_text")
@@ -2408,26 +2409,44 @@ def get_show_color(label: str) -> Tuple:
 
 
 def single_page_direct_test(page_data):
-    single_block_layout_parsing_res = get_layout_ordering(
-        page_data["parse_results"],
-        no_mask_labels=[
-            "text",
-            "formula",
-            "algorithm",
-            "reference",
-            "content",
-            "abstract",
-        ],
-    )
+    # mineru
     parsing_res_list = [
-        {
-            "block_label": parsing_res["block_label"],
-            "block_content": parsing_res["block_content"],
-            "block_bbox": parsing_res["block_bbox"],
-            "index": parsing_res.get("index", None),
-        }
-        for parsing_res in single_block_layout_parsing_res
+        {"block_bbox": page_data["sub_bboxes"][i], "block_label": page_data["sub_labels"][i],"index":page_data["sub_indices"][i],"block_content": page_data["sub_contents"][i]}
+        for i in range(len(page_data["sub_bboxes"]))
     ]
+    
+    # paddlex
+    # pro_data = [
+    #     {"block_bbox": page_data["sub_bboxes"][i], "block_label": page_data["sub_labels"][i], "block_content": "","seg_start_flag": False,"seg_end_flag": False}
+    #     for i in range(len(page_data["sub_bboxes"]))
+    # ]
+    # page_data = {
+    #     "page_idx":page_data['page_idx'],
+    #     "block_size":page_data['block_size'],
+    #     "parse_results":pro_data,
+    # }
+    
+    # single_block_layout_parsing_res = get_layout_ordering(
+    #     page_data["parse_results"],
+    #     no_mask_labels=[
+    #         "text",
+    #         "formula",
+    #         "algorithm",
+    #         "reference",
+    #         "content",
+    #         "abstract",
+    #     ],
+    # )
+    # parsing_res_list = [
+    #     {
+    #         "block_label": parsing_res["block_label"],
+    #         "block_content": parsing_res["block_content"],
+    #         "block_bbox": parsing_res["block_bbox"],
+    #         "index": parsing_res.get("index", None),
+    #     }
+    #     for parsing_res in single_block_layout_parsing_res
+    # ]
+    
     return {
         "parsing_res_list": parsing_res_list,
         "block_size": page_data["block_size"],

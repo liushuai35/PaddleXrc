@@ -17,7 +17,7 @@
 # pipeline = create_pipeline(pipeline="layout_parsing_v2",device='gpu:0')
 
 # output = pipeline.predict(
-#     "/home/shuai.liu01/PaddleXrc/inputs/simplified_chinese.pdf",
+#     "/home/user/liushuai/DocBench-100/70/simple.pdf",
 #     # "/mnt/shuailiu35/eval_layout_order/70/input.pdf",
 #     use_doc_orientation_classify=False,
 #     use_doc_unwarping=False,
@@ -28,11 +28,11 @@
 
 # for res in output:
 #     # res.print()
-#     res.save_to_img("./all")
-#     res.save_to_json("./all")
-#     # res.save_to_xlsx("./output")
-#     # res.save_to_html("./output")
-#     # res.save_to_markdown("./output1")
+#     res.save_to_img("./all_gt/70")
+#     res.save_to_json("./all_gt/70")
+    # res.save_to_xlsx("./output")
+    # res.save_to_html("./output")
+    # res.save_to_markdown("./output1")
 
 
 # import os
@@ -102,9 +102,18 @@
 
 from paddlex.inference.pipelines.layout_parsing.utils import direct_test
 
-keys = ["1andmore_column", "single_column", "double_column", "three_column"]
-for key in keys:
-    direct_test(
-        f"/home/shuai.liu01/PaddleXrc/input_jsons/input_{key}.json",
-        f"/home/shuai.liu01/PaddleXrc/input_jsons/output_{key}.json",
-    )
+# keys = ["1andmore_column", "single_column", "double_column", "three_column"]
+# for key in keys:
+#     direct_test(
+#         f"/home/shuai.liu01/PaddleXrc/input_jsons/input_{key}.json",
+#         f"/home/shuai.liu01/PaddleXrc/input_jsons/output_{key}.json",
+#     )
+num = 70
+# direct_test(
+#     f"/home/user/liushuai/DocBench-100/{num}/input_{num}.json",
+#     f"/home/user/liushuai/DocBench-100/{num}/out_{num}.json",
+# )
+direct_test(
+    f"/home/user/liushuai/DocBench-100/mineru/input_{num}.json",
+    f"/home/user/liushuai/DocBench-100/mineru/out_{num}.json",
+)

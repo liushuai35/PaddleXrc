@@ -486,16 +486,17 @@ if __name__ == "__main__":
     import os
     import glob
 
-    num = 70
-    dir_name = "1andmore_column"
+    num = 30
+    dir_name = "all_gt"
 
-    gt_data = load_data_from_json(f"/home/shuai.liu01/PaddleXrc/gt/gt_{dir_name}.json")
+    gt_data = load_data_from_json(f"/home/user/liushuai/DocBench-100/{num}/gt_{num}.json")
+    # gt_data = load_data_from_json(f"/home/user/liushuai/DocBench-100/gt_30.json")
 
     # PaddleX
     # input_jsons = glob.glob(
-    #     f"/home/shuai.liu01/PaddleXrc/api_examples/pipelines/output/{dir_name}/*.json"
+    #     f"/home/user/liushuai/PaddleXrc/api_examples/pipelines/{dir_name}/{num}/*.json"
     # )
-    # input_jsons.sort(key=lambda x: int(os.path.basename(x).split("_")[2]))
+    # input_jsons.sort(key=lambda x: int(os.path.basename(x).split("_")[1]))
     # input_data = []
     # for i, input_json in enumerate(input_jsons):
     #     if i == len(gt_data):
@@ -503,7 +504,8 @@ if __name__ == "__main__":
     #     data = load_data_from_json(input_json)
     #     input_data.append(paddlex_generate_input_data(data, [gt_data[i]]))
 
-    input_json = f"/home/shuai.liu01/PaddleXrc/input_jsons/output_{dir_name}.json"
+    # input_json = f"/home/user/liushuai/DocBench-100/{num}/out_{num}.json"
+    input_json = f"/home/user/liushuai/DocBench-100/mineru/out_{num}.json"
     input_data = []
     data = load_data_from_json(input_json)
     for i, page_data in enumerate(data):
