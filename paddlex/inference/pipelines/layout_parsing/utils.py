@@ -428,6 +428,9 @@ def get_single_block_parsing_res(
     seal_res_list: list,
     page_data: dict,
     page_index: int = -1,
+    min_gap_x=-1,
+    min_gap_y=-1,
+    is_only_x=False,
 ) -> OCRResult:
     """
     Extract structured information from OCR and layout detection results.
@@ -564,6 +567,9 @@ def get_single_block_parsing_res(
             "content",
             "abstract",
         ],
+        min_gap_x=min_gap_x,
+        min_gap_y=min_gap_y,
+        is_only_x=is_only_x,
     )
 
     return single_block_layout_parsing_res
@@ -627,7 +633,12 @@ def _split_projection_profile(arr_values: np.ndarray, min_value: float, min_gap:
 
 
 def _recursive_yx_cut(
-    boxes: np.ndarray, indices: List[int], res: List[int], min_gap: int = 1
+    boxes: np.ndarray,
+    indices: List[int],
+    res: List[int],
+    segment_ids: List[int],
+    current_id: int,
+    min_gap: int = 1,
 ):
     """
     Recursively project and segment bounding boxes, starting with Y-axis and followed by X-axis.
@@ -655,6 +666,10 @@ def _recursive_yx_cut(
     y_intervals = _split_projection_profile(y_projection, 0, 1)
 
     if not y_intervals:
+        for idx in indices:
+            segment_ids.append(current_id)
+        # current_id += 1
+        res.extend(indices)
         return
 
     # Process each segment defined by Y-axis projection
@@ -676,10 +691,17 @@ def _recursive_yx_cut(
         x_intervals = _split_projection_profile(x_projection, 0, min_gap)
 
         if not x_intervals:
+            for idx in x_sorted_indices_chunk:
+                segment_ids.append(current_id)
+            current_id += 1
+            res.extend(x_sorted_indices_chunk)
             continue
 
         # If X-axis cannot be further segmented, add current indices to results
         if len(x_intervals[0]) == 1:
+            for idx in x_sorted_indices_chunk:
+                segment_ids.append(current_id)
+            current_id += 1
             res.extend(x_sorted_indices_chunk)
             continue
 
@@ -692,11 +714,19 @@ def _recursive_yx_cut(
                 x_sorted_boxes_chunk[x_interval_indices],
                 x_sorted_indices_chunk[x_interval_indices],
                 res,
+                segment_ids,
+                current_id,
             )
+            current_id += 1
 
 
 def _recursive_xy_cut(
-    boxes: np.ndarray, indices: List[int], res: List[int], min_gap: int = 1
+    boxes: np.ndarray,
+    indices: List[int],
+    res: List[int],
+    segment_ids: List[int],
+    current_id: int,
+    min_gap: int = 1,
 ):
     """
     Recursively performs X-axis projection followed by Y-axis projection to segment bounding boxes.
@@ -725,6 +755,9 @@ def _recursive_xy_cut(
     x_intervals = _split_projection_profile(x_projection, 0, 1)
 
     if not x_intervals:
+        for idx in indices:
+            segment_ids.append(current_id)
+        res.extend(indices)
         return
 
     # Process each segment defined by X-axis projection
@@ -746,10 +779,17 @@ def _recursive_xy_cut(
         y_intervals = _split_projection_profile(y_projection, 0, min_gap)
 
         if not y_intervals:
+            for idx in y_sorted_indices_chunk:
+                segment_ids.append(current_id)
+            current_id += 1
+            res.extend(y_sorted_indices_chunk)
             continue
 
         # If Y-axis cannot be further segmented, add current indices to results
         if len(y_intervals[0]) == 1:
+            for idx in y_sorted_indices_chunk:
+                segment_ids.append(current_id)
+            current_id += 1
             res.extend(y_sorted_indices_chunk)
             continue
 
@@ -762,7 +802,10 @@ def _recursive_xy_cut(
                 y_sorted_boxes_chunk[y_interval_indices],
                 y_sorted_indices_chunk[y_interval_indices],
                 res,
+                segment_ids,
+                current_id,
             )
+            current_id += 1
 
 
 def sort_by_xycut(
@@ -786,11 +829,15 @@ def sort_by_xycut(
     """
     block_bboxes = np.asarray(block_bboxes).astype(int)
     res = []
+    segment_ids = []
+    current_id = 0
     if direction == 1:
         _recursive_yx_cut(
             block_bboxes,
             np.arange(len(block_bboxes)).tolist(),
             res,
+            segment_ids,
+            current_id,
             min_gap,
         )
     else:
@@ -798,9 +845,11 @@ def sort_by_xycut(
             block_bboxes,
             np.arange(len(block_bboxes)).tolist(),
             res,
+            segment_ids,
+            current_id,
             min_gap,
         )
-    return res
+    return res, segment_ids
 
 
 def _img_array2path(data: np.ndarray) -> str:
@@ -890,7 +939,9 @@ def _get_minbox_if_overlap_by_ratio(
 
 
 def _remove_overlap_blocks(
-    blocks: List[Dict[str, List[int]]], threshold: float = 0.65, smaller: bool = True
+    blocks: List[Dict[str, List[int]]],
+    threshold: float = 0.65,
+    smaller: bool = True,
 ) -> Tuple[List[Dict[str, List[int]]], List[Dict[str, List[int]]]]:
     """
     Remove overlapping blocks based on a specified overlap ratio threshold.
@@ -937,7 +988,9 @@ def _remove_overlap_blocks(
     return blocks, dropped_blocks
 
 
-def _get_text_median_width(blocks: List[Dict[str, any]]) -> float:
+def _get_text_median_width(
+    blocks: List[Dict[str, any]], is_horizontal=True
+) -> Tuple[float, int, float]:
     """
     Calculate the median width of blocks labeled as "text".
 
@@ -946,13 +999,36 @@ def _get_text_median_width(blocks: List[Dict[str, any]]) -> float:
 
     Returns:
         float: The median width of text blocks, or infinity if no text blocks are found.
+        int: The count of text blocks within 10% of the median width.
+        float: The page length of text blocks.
     """
-    widths = [
-        block["block_bbox"][2] - block["block_bbox"][0]
-        for block in blocks
-        if block.get("block_label") == "text"
-    ]
-    return np.median(widths) if widths else float("inf")
+    if is_horizontal:
+        widths = [
+            block["block_bbox"][2] - block["block_bbox"][0]
+            for block in blocks
+            if block.get("block_label") == "text"
+        ]
+        page_max = max([block["block_bbox"][2] for block in blocks] + [0])
+        page_min = min([block["block_bbox"][0] for block in blocks] + [0])
+    else:
+        widths = [
+            block["block_bbox"][3] - block["block_bbox"][1]
+            for block in blocks
+            if block.get("block_label")
+            in ["text", "formula", "algorithm", "reference", "content", "abstract"]
+        ]
+        page_max = max([block["block_bbox"][3] for block in blocks] + [0])
+        page_min = min([block["block_bbox"][1] for block in blocks] + [0])
+
+    if len(widths) == 0:
+        return float("inf"), 0, 0
+
+    page_length = page_max - page_min
+    k = np.median(widths)
+    differences = np.abs(widths - k)
+    k_01 = k * 0.4
+    count = np.sum(differences < k_01)
+    return k if widths else float("inf"), count, page_length
 
 
 def _get_layout_property(
@@ -997,7 +1073,11 @@ def _get_layout_property(
 
         x_min_i, _, x_max_i, _ = block["block_bbox"]
         layout_length = x_max_i - x_min_i
-        cover_count, cover_with_threshold_count, other_layout_threshold_count = 0, 0, 0
+        (
+            cover_count,
+            cover_with_threshold_count,
+            other_layout_threshold_count,
+        ) = (0, 0, 0)
         match_block_with_threshold_indexes = []
 
         has_left_text = False
@@ -1096,7 +1176,9 @@ def _get_bbox_direction(input_bbox: List[float], ratio: float = 1.0) -> bool:
 
 
 def _get_projection_iou(
-    input_bbox: List[float], match_bbox: List[float], is_horizontal: bool = True
+    input_bbox: List[float],
+    match_bbox: List[float],
+    is_horizontal: bool = True,
 ) -> float:
     """
     Calculate the IoU of lines between two bounding boxes.
@@ -1123,8 +1205,38 @@ def _get_projection_iou(
     return overlap / input_width if input_width > 0 else 0.0
 
 
+def _get_pre_cut(
+    boxes: np.ndarray, indices: List[int], direction=0, min_gap=1.0
+):  # direction 0 x;1 y
+    sorted_indices = boxes[:, direction].argsort()
+    sorted_boxes = boxes[sorted_indices]
+    sorted_indices = np.array(indices)[sorted_indices]
+
+    # Perform X-axis projection
+    projection = _projection_by_bboxes(boxes=sorted_boxes, axis=direction)
+    intervals = _split_projection_profile(projection, 0, 1)
+
+    if not intervals:
+        return []
+
+    # Process each segment defined by axis projection
+    last_end = -1
+    res = []
+    interval_list = []
+    for start, end in zip(*intervals):
+        if last_end != -1 and start - last_end >= min_gap:
+            res.append((last_end + start) // 2)
+            interval_list.append(start - last_end)
+        last_end = end
+    return res, np.median(interval_list) if len(interval_list) else 0.0
+
+
 def _get_sub_category(
-    blocks: List[Dict[str, Any]], title_labels: List[str]
+    blocks: List[Dict[str, Any]],
+    title_labels: List[str],
+    min_gap_x=10,
+    min_gap_y=10,
+    is_only_x=False,
 ) -> Tuple[List[Dict[str, Any]], List[float]]:
     """
     Determine the layout of title and text blocks and collect pre_cuts.
@@ -1165,7 +1277,26 @@ def _get_sub_category(
     region_width = region_bbox[2] - region_bbox[0]
     region_height = region_bbox[3] - region_bbox[1]
 
-    pre_cuts = {}
+    bboxes = np.array([list(map(int, block["block_bbox"])) for block in blocks])
+    pre_cuts = {"tran": False}
+
+    x_pre_cuts, interval_len_x = _get_pre_cut(
+        boxes=bboxes, indices=list(range(len(blocks))), direction=0, min_gap=min_gap_x
+    )
+    y_pre_cuts, interval_len_y = _get_pre_cut(
+        boxes=bboxes, indices=list(range(len(blocks))), direction=1, min_gap=70
+    )
+
+    if is_only_x == False:
+        if interval_len_x * 2 < interval_len_y:
+            pre_cuts["tran"] = True
+            pre_cuts["y"] = y_pre_cuts
+
+    # if y_pre_cuts != [] and is_only_x==False:
+    #     pre_cuts["y"] = y_pre_cuts
+
+    if x_pre_cuts != [] and len(blocks) > min_gap_y:
+        pre_cuts["x"] = x_pre_cuts
 
     for i, block1 in enumerate(blocks):
         block1.setdefault("title_text", [])
@@ -1209,14 +1340,19 @@ def _get_sub_category(
             is_centered = abs(block_x_center - region_x_center) <= tolerance_len
         else:
             is_centered = abs(block_y_center - region_y_center) <= tolerance_len
-
         # Condition 3: Check for surrounding text
         has_left_text = False
         has_right_text = False
         has_above_text = False
         has_below_text = False
         for block2 in blocks:
-            if block2["block_label"] != "text":
+            if (
+                block2["block_label"]
+                not in ["text", "formula", "content", "abstract", "reference"]
+                + title_labels
+                + sub_title_labels
+                + vision_title_labels
+            ):
                 continue
             bbox2 = block2["block_bbox"]
             x1_2, y1_2, x2_2, y2_2 = bbox2
@@ -1249,6 +1385,12 @@ def _get_sub_category(
             else:
                 pre_cuts.setdefault("x", []).append(x1)
 
+        block_iou_threshold = 0.1
+        if block1["block_label"] in sub_title_labels:
+            block_iou_threshold = 0.5
+        match_iou_flag_left_up = False
+        match_iou_flag_right_down = False
+
         for j, block2 in enumerate(blocks):
             if i == j:
                 continue
@@ -1263,58 +1405,68 @@ def _get_sub_category(
             )
 
             def distance_(is_horizontal, is_left_up):
-                if is_horizontal:
-                    if is_left_up:
-                        return (y1 - y2_prime + 2) // 5 + x1_prime / 5000
-                    else:
-                        return (y1_prime - y2 + 2) // 5 + x1_prime / 5000
+                if match_block_iou > 0:
+                    if is_horizontal:
+                        if is_left_up:
+                            return (y1 - y2_prime + 2) // 5 + x1_prime / 5000
+                        else:
+                            return (y1_prime - y2 + 2) // 5 + x1_prime / 5000
 
+                    else:
+                        if is_left_up:
+                            return (x1 - x2_prime + 2) // 5 + y1_prime / 5000
+                        else:
+                            return (x1_prime - x2 + 2) // 5 + y1_prime / 5000
                 else:
-                    if is_left_up:
-                        return (x1 - x2_prime + 2) // 5 + y1_prime / 5000
-                    else:
-                        return (x1_prime - x2 + 2) // 5 + y1_prime / 5000
-
-            block_iou_threshold = 0.1
-            if block1["block_label"] in sub_title_labels:
-                block_iou_threshold = 0.5
+                    return float("inf")
 
             if is_horizontal_1:
-                if match_block_iou >= block_iou_threshold:
-                    left_up_distance = distance_(True, True)
-                    right_down_distance = distance_(True, False)
-                    if (
-                        y2_prime <= y1
-                        and left_up_distance <= left_up_title_text_distance
-                    ):
-                        left_up_title_text_distance = left_up_distance
-                        left_up_title_text_index = j
-                        left_up_title_text_direction = is_horizontal_2
-                    elif (
-                        y1_prime > y2
-                        and right_down_distance < right_down_title_text_distance
-                    ):
-                        right_down_title_text_distance = right_down_distance
-                        right_down_title_text_index = j
-                        right_down_title_text_direction = is_horizontal_2
+                # if match_block_iou >= block_iou_threshold:
+                left_up_distance = distance_(True, True)
+                right_down_distance = distance_(True, False)
+                if y2_prime <= y1 and left_up_distance <= left_up_title_text_distance:
+                    left_up_title_text_index = j
+                    left_up_title_text_distance = left_up_distance
+                    left_up_title_text_direction = is_horizontal_2
+                    if match_block_iou < block_iou_threshold:
+                        match_iou_flag_left_up = False
+                    else:
+                        match_iou_flag_left_up = True
+                elif (
+                    y1_prime > y2
+                    and right_down_distance < right_down_title_text_distance
+                ):
+                    right_down_title_text_distance = right_down_distance
+                    right_down_title_text_index = j
+                    right_down_title_text_direction = is_horizontal_2
+                    if match_block_iou < block_iou_threshold:
+                        match_iou_flag_right_down = False
+                    else:
+                        match_iou_flag_right_down = True
+
             else:
-                if match_block_iou >= block_iou_threshold:
-                    left_up_distance = distance_(False, True)
-                    right_down_distance = distance_(False, False)
-                    if (
-                        x2_prime <= x1
-                        and left_up_distance <= left_up_title_text_distance
-                    ):
-                        left_up_title_text_distance = left_up_distance
-                        left_up_title_text_index = j
-                        left_up_title_text_direction = is_horizontal_2
-                    elif (
-                        x1_prime > x2
-                        and right_down_distance < right_down_title_text_distance
-                    ):
-                        right_down_title_text_distance = right_down_distance
-                        right_down_title_text_index = j
-                        right_down_title_text_direction = is_horizontal_2
+                # if match_block_iou >= block_iou_threshold:
+                left_up_distance = distance_(False, True)
+                right_down_distance = distance_(False, False)
+                if x2_prime <= x1 and left_up_distance <= left_up_title_text_distance:
+                    left_up_title_text_distance = left_up_distance
+                    left_up_title_text_index = j
+                    left_up_title_text_direction = is_horizontal_2
+                    if match_block_iou < block_iou_threshold:
+                        match_iou_flag_left_up = False
+                    else:
+                        match_iou_flag_left_up = True
+                elif (
+                    x1_prime > x2
+                    and right_down_distance < right_down_title_text_distance
+                ):
+                    right_down_title_text_distance = right_down_distance
+                    right_down_title_text_index = j
+                    right_down_title_text_direction = is_horizontal_2
+                    if match_block_iou < block_iou_threshold:
+                        match_iou_flag_right_down = False
+                    else:
+                        match_iou_flag_right_down = True
 
         height = bbox1[3] - bbox1[1]
         width = bbox1[2] - bbox1[0]
@@ -1383,6 +1535,11 @@ def _get_sub_category(
                     ):
                         sub_title.append(bbox2)
 
+        if match_iou_flag_right_down == False:
+            right_down_title_text_index = -1
+        if match_iou_flag_left_up == False:
+            left_up_title_text_index = -1
+
         if (
             is_horizontal_1
             and abs(left_up_title_text_distance - right_down_title_text_distance) * 5
@@ -1435,6 +1592,83 @@ def _get_sub_category(
     return blocks, pre_cuts
 
 
+def _projection_index_xy(blocks):
+    blocks.sort(key=lambda x: (x["index"], x["block_bbox"][1], x["block_bbox"][0]))
+
+    sorted_blocks = []
+    i = 0
+    while i < len(blocks):
+        block1 = blocks[i]
+        mid_blocks = [block1]
+        for j in range(i + 1, len(blocks)):
+            block2 = blocks[j]
+            if block1["index"] != block2["index"]:
+                break
+            iou = _get_projection_iou(
+                block1["block_bbox"], block2["block_bbox"], is_horizontal=False
+            )
+            if iou > 0.5:
+                mid_blocks.append(block2)
+            else:
+                break
+        mid_blocks.sort(key=lambda x: x["block_bbox"][0])
+        sorted_blocks.extend(mid_blocks)
+        i += len(mid_blocks)
+    return sorted_blocks
+
+
+def _projection_xy(bboxes, segment_ids, is_horizontal=False):
+    """
+    Sort and group bounding boxes based on their projection along the x or y axis.
+
+    :param bboxes: List of bounding boxes, each represented as [x1, y1, x2, y2].
+    :param is_horizontal: Boolean indicating whether to project horizontally (True) or vertically (False).
+    :return: Sorted and grouped bounding boxes.
+    """
+    # Determine the axis for sorting
+    axis = 1 if is_horizontal else 0
+
+    # Initial sort based on the chosen axis
+    # sorted_bboxes = sorted(bboxes, key=lambda x: (x[(axis + 1)%2], x[axis]))
+    bboxes_with_ids = list(zip(bboxes, segment_ids))
+    bboxes_with_ids.sort(key=lambda x: (x[1], x[0][1], x[0][0]))
+
+    # Initialize the final list of sorted and grouped bounding boxes
+    final_sorted_bboxes = []
+
+    # Initialize the visited array
+    visited = [False] * len(bboxes_with_ids)
+
+    # Group by segment_id
+    for i in range(len(bboxes_with_ids)):
+        if visited[i]:
+            continue
+
+        current_id = bboxes_with_ids[i][1]
+        mid_bboxes_with_ids = [bboxes_with_ids[i]]
+        visited[i] = True
+
+        # Collect all bboxes with the same segment_id and IoU > 0.4
+        for j in range(i + 1, len(bboxes_with_ids)):
+            if visited[j] or bboxes_with_ids[j][1] != current_id:
+                continue
+
+            bbox1 = mid_bboxes_with_ids[-1][0]
+            bbox2 = bboxes_with_ids[j][0]
+            iou = _get_projection_iou(bbox1, bbox2, is_horizontal=is_horizontal)
+            if iou > 0.5:
+                mid_bboxes_with_ids.append(bboxes_with_ids[j])
+                visited[j] = True
+
+        # Sort the collected bboxes within the same segment_id based on the projection axis
+        mid_bboxes_with_ids.sort(key=lambda x: (x[0][axis], x[0][(axis + 1) % 2]))
+
+        # Add the sorted bboxes to the final list
+        final_sorted_bboxes.extend([x[0] for x in mid_bboxes_with_ids])
+
+    return final_sorted_bboxes
+
+
 def get_layout_ordering(
     parsing_res_list: List[Dict[str, Any]],
     no_mask_labels: List[str] = [],
@@ -1444,6 +1678,9 @@ def get_layout_ordering(
     is_use_adaptive_scheme=True,
     is_add_pre_cut=True,
     is_single_stage=False,
+    min_gap_x=-1,
+    min_gap_y=-1,
+    is_only_x=False,
 ) -> None:
     """
     Process layout parsing results to remove overlapping bounding boxes
@@ -1466,51 +1703,96 @@ def get_layout_ordering(
         threshold=0.5,
         smaller=True,
     )
-    parsing_res_list, pre_cuts = _get_sub_category(parsing_res_list, title_text_labels)
+    parsing_res_list, pre_cuts = _get_sub_category(
+        parsing_res_list,
+        title_text_labels,
+        min_gap_x=min_gap_x,
+        min_gap_y=min_gap_y,
+        is_only_x=is_only_x,
+    )
 
-    parsing_res_by_pre_cuts_list = []
+    if is_only_xycut == True:
+        doc_flag = False
+
+    projection_direction_page = False
+    median_height, small_height_num, page_height = _get_text_median_width(
+        parsing_res_list, is_horizontal=False
+    )
+    if median_height < 0.05 * page_height and small_height_num > 45:
+        pre_cuts = {"x": []}
+        projection_direction_page = True
 
     if is_only_xycut or is_add_mgs == False or is_add_pre_cut == False:
         parsing_res_by_pre_cuts_list = [parsing_res_list]
     else:
-        if len(pre_cuts) > 0:
+        parsing_res_by_pre_cuts_list = [parsing_res_list]
+        if len(pre_cuts) > 1:
             block_bboxes = [block["block_bbox"] for block in parsing_res_list]
-            for axis, cuts in pre_cuts.items():
-                axis_index = 1 if axis == "y" else 0
+            if pre_cuts["tran"]:
+                axes_order = ["y", "x"]
+            else:
+                axes_order = ["x", "y"]
+            # print(pre_cuts)
+            # print(axes_order)
+            for axis in axes_order:
+                if axis in pre_cuts:
+                    axis_index = 1 if axis == "y" else 0
 
-                max_val = max(bbox[axis_index + 2] for bbox in block_bboxes)
+                    max_val = max(bbox[axis_index + 2] for bbox in block_bboxes)
 
-                intervals = []
-                prev = 0
-                for cut in sorted(cuts):
-                    intervals.append((prev, cut))
-                    prev = cut
-                intervals.append((prev, max_val))
+                    intervals = []
+                    prev = 0
+                    for cut in sorted(pre_cuts[axis]):
+                        intervals.append((prev, cut))
+                        prev = cut
+                    intervals.append((prev, max_val))
 
-                for start, end in intervals:
-                    parsing_res_by_pre_cuts = []
-                    for idx, bbox in enumerate(block_bboxes):
-                        if (bbox[axis_index] >= start) and (bbox[axis_index] < end):
-                            parsing_res_by_pre_cuts.append(parsing_res_list[idx])
-                    parsing_res_by_pre_cuts_list.append(parsing_res_by_pre_cuts)
-        else:
-            parsing_res_by_pre_cuts_list = [parsing_res_list]
+                    new_parsing_res_by_pre_cuts_list = []
+
+                    for parsing_res_group in parsing_res_by_pre_cuts_list:
+                        for start, end in intervals:
+                            parsing_res_by_current_interval = []
+                            parsing_res_group_bboxes = [
+                                block["block_bbox"] for block in parsing_res_group
+                            ]
+                            for idx, bbox in enumerate(parsing_res_group_bboxes):
+                                if (bbox[axis_index] >= start) and (
+                                    bbox[axis_index] < end
+                                ):
+                                    parsing_res_by_current_interval.append(
+                                        parsing_res_group[idx]
+                                    )
+                            new_parsing_res_by_pre_cuts_list.append(
+                                parsing_res_by_current_interval
+                            )
+
+                    parsing_res_by_pre_cuts_list = new_parsing_res_by_pre_cuts_list
 
     final_parsing_res_list = []
     num_index = 0
     num_sub_index = 0
-    for parsing_res_by_pre_cuts in parsing_res_by_pre_cuts_list:
-
+    page_first_doc_title = False
+    for sub_page_idx, parsing_res_by_pre_cuts in enumerate(
+        parsing_res_by_pre_cuts_list
+    ):
+        # print("input", [block["block_bbox"] for block in parsing_res_by_pre_cuts])
         # use mask
         if is_only_xycut == False:
             doc_flag = False
-            median_width = _get_text_median_width(parsing_res_by_pre_cuts)
+            median_width, _, _ = _get_text_median_width(parsing_res_by_pre_cuts)
             parsing_res_by_pre_cuts, projection_direction = _get_layout_property(
                 parsing_res_by_pre_cuts,
                 median_width,
                 no_mask_labels=no_mask_labels,
                 threshold=0.3,
             )
+            projection_direction = projection_direction or projection_direction_page
+
+            for block in parsing_res_by_pre_cuts:
+                block["block_bbox"] = list(map(int, block["block_bbox"]))
+                if block["block_label"] == "doc_title":
+                    page_first_doc_title = True
+
             # Convert bounding boxes to float and remove overlaps
             (
                 double_text_blocks,
@@ -1525,12 +1807,19 @@ def get_layout_ordering(
 
             drop_indexes = []
 
+            parsing_res_by_pre_cuts.sort(key=lambda x: int(x["block_bbox"][1]))
+            first_label_flag = True
+
             for index, block in enumerate(parsing_res_by_pre_cuts):
                 label = block["sub_label"]
                 block["block_bbox"] = list(map(int, block["block_bbox"]))
 
                 # use mask and add mgs
                 if is_add_mgs:
+
+                    # if page_first_doc_title == False and (first_label_flag and label == "paragraph_title"):
+                    #     block["sub_label"] = "doc_title"
+
                     if label == "doc_title":
                         doc_flag = True
 
@@ -1538,25 +1827,30 @@ def get_layout_ordering(
                         if block["layout"] == "double":
                             double_text_blocks.append(block)
                             drop_indexes.append(index)
-
-                        elif block["layout"] == "other":
-                            other_text_blocks.append(block)
-                            drop_indexes.append(index)
+                        # elif block["layout"] == "other":
+                        #     other_text_blocks.append(block)
+                        #     drop_indexes.append(index)
+                        first_label_flag = False
                     elif label == "title_text":
                         title_text_blocks.append(block)
                         drop_indexes.append(index)
+                        first_label_flag = False
                     elif label == "vision_footnote":
                         vision_footnote_blocks.append(block)
                         drop_indexes.append(index)
+                        first_label_flag = False
                     elif label in vision_title_labels:
                         vision_title_blocks.append(block)
                         drop_indexes.append(index)
+                        first_label_flag = False
                     elif label in title_labels:
                         title_blocks.append(block)
                         drop_indexes.append(index)
+                        first_label_flag = False
                     elif label in vision_labels:
                         vision_blocks.append(block)
                         drop_indexes.append(index)
+                        first_label_flag = False
                     else:
                         other_blocks.append(block)
                         drop_indexes.append(index)
@@ -1566,6 +1860,7 @@ def get_layout_ordering(
                         other_blocks.append(block)
                         drop_indexes.append(index)
 
+            # keep single_layout text
             for index in sorted(drop_indexes, reverse=True):
                 del parsing_res_by_pre_cuts[index]
 
@@ -1585,27 +1880,35 @@ def get_layout_ordering(
                         block_bboxes = [
                             block["block_bbox"] for block in parsing_res_by_pre_cuts
                         ]
-                        block_bboxes.sort(
-                            key=lambda x: (
-                                x[0] // max(20, median_width),
-                                x[1],
-                            ),
-                        )
+                        # block_bboxes.sort(
+                        #     key=lambda x: (
+                        #         x[0] // max(20, median_width),
+                        #         x[1],
+                        #     ),
+                        # )
                         block_bboxes = np.array(block_bboxes)
-                        sorted_indices = sort_by_xycut(
+                        # print("sort by yx")
+                        sorted_indices, segment_ids = sort_by_xycut(
                             block_bboxes, direction=1, min_gap=1
                         )
                     else:
                         block_bboxes = [
                             block["block_bbox"] for block in parsing_res_by_pre_cuts
                         ]
-                        block_bboxes.sort(key=lambda x: (x[0] // 20, x[1]))
+                        # block_bboxes.sort(key=lambda x: (x[0] // 20, x[1]))
                         block_bboxes = np.array(block_bboxes)
-                        sorted_indices = sort_by_xycut(
-                            block_bboxes, direction=0, min_gap=20
+                        # print("sort by xy")
+                        sorted_indices, segment_ids = sort_by_xycut(
+                            block_bboxes, direction=0, min_gap=1
                         )
                     # get index
                     sorted_boxes = block_bboxes[sorted_indices].tolist()
+                    # print("sorte bboxes", sorted_boxes, segment_ids)
+
+                    # projection ordering
+                    sorted_boxes = _projection_xy(sorted_boxes, segment_ids)
+
+                    # print(sorted_boxes)
                     for block in parsing_res_by_pre_cuts:
                         block["index"] = (
                             num_index + sorted_boxes.index(block["block_bbox"]) + 1
@@ -1613,6 +1916,7 @@ def get_layout_ordering(
                         block["sub_index"] = (
                             num_sub_index + sorted_boxes.index(block["block_bbox"]) + 1
                         )
+
             # use mask and no mgs
             else:
                 block_bboxes = [
@@ -1625,7 +1929,9 @@ def get_layout_ordering(
                     ),
                 )
                 block_bboxes = np.array(block_bboxes)
-                sorted_indices = sort_by_xycut(block_bboxes, direction=1, min_gap=1)
+                sorted_indices, segment_ids = sort_by_xycut(
+                    block_bboxes, direction=1, min_gap=1
+                )
                 # get index
                 sorted_boxes = block_bboxes[sorted_indices].tolist()
                 for block in parsing_res_by_pre_cuts:
@@ -1760,9 +2066,14 @@ def get_layout_ordering(
                     double_text_blocks,
                     distance_type="nearest_iou_edge_distance",
                 )
-                parsing_res_by_pre_cuts.sort(
-                    key=lambda x: (x["index"], x["block_bbox"][1], x["block_bbox"][0]),
-                )
+                # parsing_res_by_pre_cuts.sort(
+                #     key=lambda x: (
+                #         x["index"],
+                #         x["block_bbox"][1],
+                #         x["block_bbox"][0],
+                #     ),
+                # )
+                parsing_res_by_pre_cuts = _projection_index_xy(parsing_res_by_pre_cuts)
 
                 for idx, block in enumerate(parsing_res_by_pre_cuts):
                     block["index"] = num_index + idx + 1
@@ -1771,11 +2082,12 @@ def get_layout_ordering(
                 # label:doc_title , paragraph_title
                 title_blocks.sort(
                     key=lambda x: (
-                        x["block_bbox"][1] // 10,
+                        x["block_bbox"][1],
                         x["block_bbox"][0] // median_width,
                         x["block_bbox"][1] ** 2 + x["block_bbox"][0] ** 2,
                     ),
                 )
+
                 nearest_match_(title_blocks, distance_type="nearest_iou_edge_distance")
 
                 if doc_flag:
@@ -1788,7 +2100,11 @@ def get_layout_ordering(
                     for i, block in enumerate(parsing_res_by_pre_cuts):
                         if block["block_label"] == "doc_title":
                             doc_titles.append(
-                                (i, block["block_bbox"][1], block["block_bbox"][0]),
+                                (
+                                    i,
+                                    block["block_bbox"][1],
+                                    block["block_bbox"][0],
+                                ),
                             )
                     doc_titles.sort(key=lambda x: (x[1], x[2]))
                     first_doc_title_index = doc_titles[0][0]
@@ -1801,13 +2117,12 @@ def get_layout_ordering(
                             x["block_bbox"][0],
                         ),
                     )
+                    # parsing_res_by_pre_cuts = _projection_index_xy(
+                    #     parsing_res_by_pre_cuts
+                    # )
                 else:
-                    parsing_res_by_pre_cuts.sort(
-                        key=lambda x: (
-                            x["index"],
-                            x["block_bbox"][1],
-                            x["block_bbox"][0],
-                        ),
+                    parsing_res_by_pre_cuts = _projection_index_xy(
+                        parsing_res_by_pre_cuts
                     )
 
                 for idx, block in enumerate(parsing_res_by_pre_cuts):
@@ -1815,24 +2130,29 @@ def get_layout_ordering(
                     block["sub_index"] = num_sub_index + idx + 1
 
                 # label:other layout text
-                other_text_blocks.sort(
-                    key=lambda x: (
-                        x["block_bbox"][1] // 10,
-                        x["block_bbox"][0] // median_width,
-                        x["block_bbox"][1] ** 2 + x["block_bbox"][0] ** 2,
-                    ),
-                )
-                nearest_match_(
-                    double_text_blocks,
-                    distance_type="nearest_iou_edge_distance",
-                )
-                parsing_res_by_pre_cuts.sort(
-                    key=lambda x: (x["index"], x["block_bbox"][1], x["block_bbox"][0]),
-                )
+                # other_text_blocks.sort(
+                #     key=lambda x: (
+                #         x["block_bbox"][1] // 10,
+                #         x["block_bbox"][0] // median_width,
+                #         x["block_bbox"][1] ** 2 + x["block_bbox"][0] ** 2,
+                #     ),
+                # )
+                # nearest_match_(
+                #     other_text_blocks,
+                #     distance_type="nearest_iou_edge_distance",
+                # )
+                # # parsing_res_by_pre_cuts.sort(
+                # #     key=lambda x: (
+                # #         x["index"],
+                # #         x["block_bbox"][1],
+                # #         x["block_bbox"][0],
+                # #     ),
+                # # )
+                # parsing_res_by_pre_cuts = custom_sort_key(parsing_res_by_pre_cuts)
 
-                for idx, block in enumerate(parsing_res_by_pre_cuts):
-                    block["index"] = num_index + idx + 1
-                    block["sub_index"] = num_sub_index + idx + 1
+                # for idx, block in enumerate(parsing_res_by_pre_cuts):
+                #     block["index"] = num_index + idx + 1
+                #     block["sub_index"] = num_sub_index + idx + 1
 
                 # label:title-text
                 nearest_match_(title_text_blocks, distance_type="title_text")
@@ -1847,7 +2167,10 @@ def get_layout_ordering(
                         return -1 if label == "doc_title" else input_bbox[0]
 
                 parsing_res_by_pre_cuts.sort(
-                    key=lambda x: (x["index"], hor_tb_and_ver_lr(x, x["block_label"])),
+                    key=lambda x: (
+                        x["index"],
+                        hor_tb_and_ver_lr(x, x["block_label"]),
+                    ),
                 )
 
                 for idx, block in enumerate(parsing_res_by_pre_cuts):
@@ -1927,7 +2250,9 @@ def get_layout_ordering(
                     )
                 else:
                     nearest_match_(
-                        all_blocks, distance_type="manhattan", is_add_index=True
+                        all_blocks,
+                        distance_type="manhattan",
+                        is_add_index=True,
                     )
 
                 parsing_res_by_pre_cuts.sort(
@@ -1949,7 +2274,9 @@ def get_layout_ordering(
                     block["block_bbox"] for block in parsing_res_by_pre_cuts
                 ]
                 block_bboxes = np.array(block_bboxes)
-                sorted_indices = sort_by_xycut(block_bboxes, direction=1, min_gap=1)
+                sorted_indices, segment_ids = sort_by_xycut(
+                    block_bboxes, direction=1, min_gap=1
+                )
 
                 sorted_boxes = block_bboxes[sorted_indices].tolist()
 
@@ -1961,6 +2288,22 @@ def get_layout_ordering(
                         num_sub_index + sorted_boxes.index(block["block_bbox"]) + 1
                     )
 
+        if page_first_doc_title == False and doc_flag:
+            page_first_doc_title = True
+            if pre_cuts.get("x") != None and sub_page_idx != 0:
+                init_idx = 0
+                parsing_res_by_pre_cuts.sort(key=lambda x: x.get("index", 999))
+                for i in range(
+                    min(len(parsing_res_by_pre_cuts), 3)
+                ):  # doc title,title_text,title_text
+                    if parsing_res_by_pre_cuts[i]["sub_label"] in [
+                        "doc_title",
+                        "title_text",
+                    ]:
+                        parsing_res_by_pre_cuts[i]["index"] = init_idx
+                        parsing_res_by_pre_cuts[i]["sub_index"] = init_idx
+                        init_idx += 0.01
+
         # add all parsing result
         final_parsing_res_list.extend(parsing_res_by_pre_cuts)
 
@@ -1969,6 +2312,14 @@ def get_layout_ordering(
         for parsing_res in parsing_res_by_pre_cuts:
             if parsing_res.get("index"):
                 num_index += 1
+
+    final_parsing_res_list.sort(key=lambda x: (x["sub_index"]))
+    index = 1
+    for idx, block in enumerate(final_parsing_res_list):
+        if block.get("index"):
+            block["index"] = index
+            index += 1
+        block["sub_index"] = idx + 1
 
     parsing_res_list = [
         {
@@ -2144,7 +2495,7 @@ def _nearest_edge_distance(
     distance = [float("inf")] * 4
 
     # input_bbox is to the left of match_bbox
-    if x2 < x1_prime:
+    if x2 <= x1_prime:
         direction_num += 1
         distance[0] = x1_prime - x2
         if abs(distance[0] - min_edge_distance_x) <= tolerance_len:
@@ -2152,7 +2503,7 @@ def _nearest_edge_distance(
         else:
             distance_x = distance[0] * weight[0]
     # input_bbox is to the right of match_bbox
-    elif x1 > x2_prime:
+    elif x1 >= x2_prime:
         direction_num += 1
         distance[1] = x1 - x2_prime
         if abs(distance[1] - min_edge_distance_x) <= tolerance_len:
@@ -2164,7 +2515,7 @@ def _nearest_edge_distance(
         distance_x = 0
 
     # input_bbox is above match_bbox
-    if y2 < y1_prime:
+    if y2 <= y1_prime:
         direction_num += 1
         distance[2] = y1_prime - y2
         if abs(distance[2] - min_edge_distance_y) <= tolerance_len:
@@ -2174,7 +2525,7 @@ def _nearest_edge_distance(
         if label in no_mask_labels:
             distance_y = max(0.1, distance_y) * 10  # for abstract
     # input_bbox is below match_bbox
-    elif y1 > y2_prime:
+    elif y1 >= y2_prime:
         direction_num += 1
         distance[3] = y1 - y2_prime
         if abs(distance[3] - min_edge_distance_y) <= tolerance_len:
@@ -2408,45 +2759,69 @@ def get_show_color(label: str) -> Tuple:
     return label_colors.get(label, default_color)
 
 
-def single_page_direct_test(page_data):
+time_total = 0
+
+
+def single_page_direct_test(page_data, min_gap_x=-1, min_gap_y=-1, is_only_x=False):
+    global time_total
     # mineru
-    parsing_res_list = [
-        {"block_bbox": page_data["sub_bboxes"][i], "block_label": page_data["sub_labels"][i],"index":page_data["sub_indices"][i],"block_content": page_data["sub_contents"][i]}
-        for i in range(len(page_data["sub_bboxes"]))
-    ]
-    
-    # paddlex
-    # pro_data = [
-    #     {"block_bbox": page_data["sub_bboxes"][i], "block_label": page_data["sub_labels"][i], "block_content": "","seg_start_flag": False,"seg_end_flag": False}
-    #     for i in range(len(page_data["sub_bboxes"]))
-    # ]
-    # page_data = {
-    #     "page_idx":page_data['page_idx'],
-    #     "block_size":page_data['block_size'],
-    #     "parse_results":pro_data,
-    # }
-    
-    # single_block_layout_parsing_res = get_layout_ordering(
-    #     page_data["parse_results"],
-    #     no_mask_labels=[
-    #         "text",
-    #         "formula",
-    #         "algorithm",
-    #         "reference",
-    #         "content",
-    #         "abstract",
-    #     ],
-    # )
     # parsing_res_list = [
     #     {
-    #         "block_label": parsing_res["block_label"],
-    #         "block_content": parsing_res["block_content"],
-    #         "block_bbox": parsing_res["block_bbox"],
-    #         "index": parsing_res.get("index", None),
+    #         "block_bbox": page_data["sub_bboxes"][i],
+    #         "block_label": page_data["sub_labels"][i],
+    #         "index": page_data["sub_indices"][i],
+    #         "block_content": page_data["sub_contents"][i],
     #     }
-    #     for parsing_res in single_block_layout_parsing_res
+    #     for i in range(len(page_data["sub_bboxes"]))
     # ]
-    
+
+    # paddlex
+    if page_data.get("parse_results") == None:
+        parsing_res_list = [
+            {
+                "block_bbox": page_data["sub_bboxes"][i],
+                "block_label": page_data["sub_labels"][i],
+                "block_content": page_data["sub_contents"][i],
+                "seg_start_flag": False,
+                "seg_end_flag": False,
+            }
+            for i in range(len(page_data["sub_bboxes"]))
+        ]
+        page_data = {
+            "block_size": page_data["block_size"],
+            "page_idx": page_data["page_idx"],
+            "parse_results": parsing_res_list,
+        }
+
+    import time
+
+    start_time = time.time()
+    single_block_layout_parsing_res = get_layout_ordering(
+        page_data["parse_results"],
+        no_mask_labels=[
+            "text",
+            "formula",
+            "algorithm",
+            "reference",
+            "content",
+            "abstract",
+        ],
+        min_gap_x=min_gap_x,
+        min_gap_y=min_gap_y,
+        is_only_x=is_only_x,
+        # is_only_xycut=True,
+    )
+    time_total += time.time() - start_time
+    parsing_res_list = [
+        {
+            "block_label": parsing_res["block_label"],
+            "block_content": parsing_res["block_content"],
+            "block_bbox": parsing_res["block_bbox"],
+            "index": parsing_res.get("index", None),
+        }
+        for parsing_res in single_block_layout_parsing_res
+    ]
+
     return {
         "parsing_res_list": parsing_res_list,
         "block_size": page_data["block_size"],
@@ -2454,18 +2829,36 @@ def single_page_direct_test(page_data):
     }
 
 
-def direct_test(input_path, output_path):
+def direct_test(
+    input_path,
+    output_path,
+    min_gap_x=-1,
+    min_gap_y=-1,
+    is_only_x=True,
+    start_page_id=0,
+    end_page_id=None,
+):
+    global time_total
     import json
 
     with open(input_path, "r", encoding="utf-8") as file:
         data = json.load(file)
 
     all_res = []
-    for page_data in data:
-        all_res.append(single_page_direct_test(page_data=page_data))
+    for page_data in data[start_page_id:end_page_id]:
+        all_res.append(
+            single_page_direct_test(
+                page_data=page_data,
+                min_gap_x=min_gap_x,
+                min_gap_y=min_gap_y,
+                is_only_x=is_only_x,
+            )
+        )
 
     with open(output_path, "w", encoding="utf-8") as file:
         json.dump(all_res, file, ensure_ascii=False, indent=4)
+
+    return time_total, len(data)
 
 
 if __name__ == "__main__":
@@ -2473,4 +2866,6 @@ if __name__ == "__main__":
     direct_test(
         f"/home/shuai.liu01/PaddleXrc/input_jsons/input_{key}.json",
         f"/home/shuai.liu01/PaddleXrc/input_jsons/output_{key}.json",
+        start_page_id=103,
+        end_page_id=104,
     )

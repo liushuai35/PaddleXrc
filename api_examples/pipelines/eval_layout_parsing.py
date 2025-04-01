@@ -93,7 +93,10 @@ def remove_overlaps_blocks(blocks, threshold=0.65, smaller=True):
             if block1 in dropped_blocks or block2 in dropped_blocks:
                 continue
             overlap_box = get_minbox_if_overlap_by_ratio(
-                block1["layout_bbox"], block2["layout_bbox"], threshold, smaller=smaller
+                block1["layout_bbox"],
+                block2["layout_bbox"],
+                threshold,
+                smaller=smaller,
             )
             if overlap_box:
                 block_to_remove = next(
@@ -113,9 +116,62 @@ def remove_overlaps_blocks(blocks, threshold=0.65, smaller=True):
     return blocks, dropped_blocks
 
 
+# def match_bboxes(input_bboxes, input_indices, gt_bboxes, gt_indices, iou_threshold=0.5):
+#     """
+#     Match input bounding boxes to ground truth bounding boxes based on IoU.
+
+#     Args:
+#         input_bboxes: List of input bounding boxes.
+#         input_indices: List of input indices.
+#         gt_bboxes: List of ground truth bounding boxes.
+#         gt_indices: List of ground truth indices.
+#         iou_threshold (float): IoU threshold for matching.
+
+#     Returns:
+#         tuple: Matched input indices and ground truth indices in relative order.
+#     """
+#     matched_pairs = []
+
+#     # Step 1: Match input bboxes to gt bboxes
+#     for input_idx, input_bbox in zip(input_indices, input_bboxes):
+#         matched_gt_indices = []
+#         for gt_idx, gt_bbox in zip(gt_indices, gt_bboxes):
+#             iou = calculate_iou(input_bbox, gt_bbox)
+#             if iou >= iou_threshold:
+#                 matched_gt_indices.append(gt_idx)
+
+#         # Process matches
+#         if matched_gt_indices:
+#             for gt_idx in matched_gt_indices:
+#                 matched_pairs.append((input_idx, gt_idx))
+
+#     # Step 2: Sort matched pairs by input indices
+#     sorted_matches = sorted(matched_pairs, key=lambda x: (x[0], x[1]))
+
+#     # Generate continuous indices for matched inputs
+#     if not sorted_matches:
+#         return [], []
+
+#     matched_input = []
+#     matched_gt = []
+#     new_sorted_matches = []
+
+#     for i, (x0, x1) in enumerate(sorted_matches):
+#         new_sorted_matches.append((i + 1, x1))
+
+#     new_sorted_matches.sort(key=lambda x: (x[1], x[0]))
+
+#     for i, (x0, x1) in enumerate(new_sorted_matches):
+#         matched_input.append(x0)
+#         matched_gt.append(i + 1)
+
+#     return matched_input, matched_gt
+
+
 def match_bboxes(input_bboxes, input_indices, gt_bboxes, gt_indices, iou_threshold=0.5):
     """
     Match input bounding boxes to ground truth bounding boxes based on IoU.
+    If no input bboxes match a gt bbox, use -1; otherwise, use the order of input bboxes.
 
     Args:
         input_bboxes: List of input bounding boxes.
@@ -125,30 +181,34 @@ def match_bboxes(input_bboxes, input_indices, gt_bboxes, gt_indices, iou_thresho
         iou_threshold (float): IoU threshold for matching.
 
     Returns:
-        tuple: Matched input indices and ground truth indices in relative order.
+        tuple: Matched input indices and ground truth indices in relative order, or -1 if no match.
     """
-    matched_pairs = []
-
-    # Step 1: Match input bboxes to gt bboxes
-    for input_idx, input_bbox in zip(input_indices, input_bboxes):
-        matched_gt_indices = []
-        for gt_idx, gt_bbox in zip(gt_indices, gt_bboxes):
-            iou = calculate_iou(input_bbox, gt_bbox)
-            if iou >= iou_threshold:
-                matched_gt_indices.append(gt_idx)
-
-        # Process matches
-        if matched_gt_indices:
-            for gt_idx in matched_gt_indices:
-                matched_pairs.append((input_idx, gt_idx))
-
-    # Step 2: Sort matched pairs by input indices
-    sorted_matches = sorted(matched_pairs, key=lambda x: (x[0], x[1]))
-
-    # Generate continuous indices for matched inputs
-    if not sorted_matches:
+    if len(gt_indices) == 0:
         return [], []
 
+    matched_pairs = []
+    unmatched_gt_indices = set(gt_indices)
+    gt_matched = [False] * (max(gt_indices) + 1)
+
+    # Step 1: Match input bboxes to gt bboxes
+    extra_num = 0
+    for gt_idx, gt_bbox in zip(gt_indices, gt_bboxes):
+        for input_idx, input_bbox in zip(input_indices, input_bboxes):
+            iou = calculate_iou(input_bbox, gt_bbox)
+            if iou >= iou_threshold:
+                if gt_matched[gt_idx] == True:
+                    extra_num += 1
+                matched_pairs.append((input_idx, gt_idx + extra_num))
+                unmatched_gt_indices.discard(gt_idx)
+                gt_matched[gt_idx] = True
+
+    # Handle unmatched gt bboxes
+    unmatched_gt_indices = [index + extra_num for index in list(unmatched_gt_indices)]
+
+    # Step 2: Sort matched pairs by input indices and handle multiple matches
+    sorted_matches = sorted(matched_pairs, key=lambda x: x[0])
+
+    # Generate continuous indices for matched inputs
     matched_input = []
     matched_gt = []
     new_sorted_matches = []
@@ -160,13 +220,18 @@ def match_bboxes(input_bboxes, input_indices, gt_bboxes, gt_indices, iou_thresho
 
     for i, (x0, x1) in enumerate(new_sorted_matches):
         matched_input.append(x0)
-        matched_gt.append(i + 1)
+        # matched_gt.append(i + 1)
+        matched_gt.append(x1)
 
-    return matched_input, matched_gt
+    # Combine matched and unmatched indices
+    final_input_indices = matched_input + [0] * len(unmatched_gt_indices)
+    final_gt_indices = matched_gt + unmatched_gt_indices
+
+    return final_input_indices, final_gt_indices
 
 
 def calculate_metrics_with_block(
-    block_index, input_bboxes, input_indices, gt_bboxes, gt_indices
+    block_index, input_bboxes, input_indices, gt_bboxes, gt_indices, debug=True
 ):
     """
     Calculate evaluation metrics (BLEU, ARD, TAU) for matched bounding boxes.
@@ -190,9 +255,21 @@ def calculate_metrics_with_block(
     if len(sorted_gt_indices) < 4 and sorted_gt_indices == sorted_matched_indices:
         bleu_score = 1
     else:
-        bleu_score = sentence_bleu([sorted_gt_indices], sorted_matched_indices)
+        # sorted_gt_indices = list(range(1,len(gt_bboxes) + 1))
+        length = 4 - len(sorted_gt_indices)
+        if length > 0:
+            ext = list(range(len(sorted_gt_indices) + 1, 5))
+        else:
+            ext = []
+        bleu_score = sentence_bleu(
+            [sorted_gt_indices + ext], sorted_matched_indices + ext
+        )  # references is list
+        # if bleu_score<0.99 and length>0:
+        #     print([sorted_gt_indices+ext], sorted_matched_indices+ext)
+        #     print(bleu_score)
+        #     raise ""
 
-    if bleu_score < 0.99:
+    if bleu_score < 0.99 and debug:
         print("block_index : ", block_index)
         print("bleu_score : ", bleu_score)
         print("input_bboxes : ", input_bboxes)
@@ -226,7 +303,7 @@ def calculate_metrics_with_block(
 
 
 def calculate_metrics_with_page(
-    input_data, gt_data, iou_threshold=0.5, is_order_match=True
+    input_data, gt_data, iou_threshold=0.5, is_order_match=True, debug=True
 ):
     """
     Calculate evaluation metrics for pages, comparing input data to ground truth data.
@@ -264,7 +341,12 @@ def calculate_metrics_with_page(
                         gt_indices = [index + 1 for index in gt_indices]
                     bleu_score, ard, tau, edit_dist, length = (
                         calculate_metrics_with_block(
-                            j, input_bboxes, input_indices, gt_bboxes, gt_indices
+                            j,
+                            input_bboxes,
+                            input_indices,
+                            gt_bboxes,
+                            gt_indices,
+                            debug,
                         )
                     )
                     total_bleu_score += bleu_score
@@ -286,7 +368,12 @@ def calculate_metrics_with_page(
             if 0 in gt_indices:
                 gt_indices = [index + 1 for index in gt_indices]
             bleu_score, ard, tau, edit_dist, length = calculate_metrics_with_block(
-                block_index, input_bboxes, input_indices, gt_bboxes, gt_indices
+                block_index,
+                input_bboxes,
+                input_indices,
+                gt_bboxes,
+                gt_indices,
+                debug,
             )
             if bleu_score < 0.95:
                 bad_cases.append(block_index)
@@ -296,12 +383,13 @@ def calculate_metrics_with_page(
             total_edit_dist += edit_dist
             total_match_block_num += 1
             total_length += length
-        print("bad cases:", bad_cases)
+        if debug:
+            print("bad cases:", bad_cases)
     return (
         total_bleu_score / total_match_block_num,
         total_ard / total_match_block_num,
         total_tau / total_match_block_num,
-        total_edit_dist / total_length,
+        total_edit_dist / max(1, total_length),
     )
 
 
@@ -327,6 +415,7 @@ def paddlex_generate_input_data(data, gt_data=None):
             gt_block_size[1] / block_size[1],
         ],
     }
+
     for sub_block in parsing_result:
         if sub_block.get("index") != None:
             input_data["sub_bboxes"].append(
@@ -443,25 +532,35 @@ def mineru_generate_input_data(data, gt_data):
 
     for block_index, block in enumerate(parsing_result):
         sub_blocks = block["sub_blocks"]
-        sub_blocks = sorted(
-            sub_blocks, key=lambda x: (x["index"], x["bbox"][1], x["bbox"][0])
-        )
-        for i, sub_block in enumerate(sub_blocks):
-            input_data[block_index]["sub_bboxes"].append(
-                list(
-                    map(
-                        int,
-                        np.array(sub_block["bbox"])
-                        * np.array(input_data[block_index]["page_scale"] * 2),
-                    )
-                )
+        if len(sub_blocks) == 0:
+            input_data[block_index]["sub_indices"] = [-1] * len(
+                gt_data[block_index]["sub_indices"]
             )
-            input_data[block_index]["sub_indices"].append(i + 1)
+        else:
+            # sub_blocks = sorted(
+            #     sub_blocks, key=lambda x: (x["index"], x.("bbox",[0,0])[1], x.get("bbox",[0,0])[0])
+            # )
+
+            for i, sub_block in enumerate(sub_blocks):
+                if sub_block.get("index") != None:
+                    input_data[block_index]["sub_bboxes"].append(
+                        list(
+                            map(
+                                int,
+                                np.array(sub_block["bbox"])
+                                * np.array(input_data[block_index]["page_scale"] * 2),
+                            )
+                        )
+                    )
+                # input_data[block_index]["sub_indices"].append(i + 1)
+                input_data[block_index]["sub_indices"].append(sub_block["index"])
 
     return input_data
 
 
 def load_data_from_json(path):
+    import json
+
     """
     Load data from a JSON file.
 
@@ -477,49 +576,94 @@ def load_data_from_json(path):
 
 
 def write_data_from_json(path, data):
+    import json
+
     with open(path, "w", encoding="utf-8") as file:
         json.dump(data, file, ensure_ascii=False, indent=4)
 
 
-if __name__ == "__main__":
+def main(
+    debug=False, start_idx=0, end_idx=4, page_start_idx=0, page_end_idx=None, num=-1
+):
     import json
     import os
     import glob
 
-    num = 30
-    dir_name = "all_gt"
+    total_bleu_score = 0
+    total_ard = 0
+    total_tau = 0
+    total_edit_dist = 0
+    keys = [
+        "1andmore_column",
+        "double_column",
+        "three_column",
+        "single_column",
+    ]
+    for index in range(start_idx, end_idx):
+        dir_name = keys[index]
 
-    gt_data = load_data_from_json(f"/home/user/liushuai/DocBench-100/{num}/gt_{num}.json")
-    # gt_data = load_data_from_json(f"/home/user/liushuai/DocBench-100/gt_30.json")
+        if num != -1:
+            input_json = f"/home/shuai.liu01/DocBench-100/{num}/out_{num}.json"
+            gt_data = load_data_from_json(f"/home/shuai.liu01/gt_{num}.json")
+        else:
+            input_json = (
+                f"/home/shuai.liu01/PaddleXrc/input_jsons/output_{dir_name}.json"
+            )
+            # input_json = (
+            #     f"/home/shuai.liu01/PaddleXrc/mineru_results/output_{dir_name}.json"
+            # )
+            gt_data = load_data_from_json(
+                f"/home/shuai.liu01/PaddleXrc/gt/gt_{dir_name}.json"
+            )
 
-    # PaddleX
-    # input_jsons = glob.glob(
-    #     f"/home/user/liushuai/PaddleXrc/api_examples/pipelines/{dir_name}/{num}/*.json"
-    # )
-    # input_jsons.sort(key=lambda x: int(os.path.basename(x).split("_")[1]))
-    # input_data = []
-    # for i, input_json in enumerate(input_jsons):
-    #     if i == len(gt_data):
-    #         break
-    #     data = load_data_from_json(input_json)
-    #     input_data.append(paddlex_generate_input_data(data, [gt_data[i]]))
+        gt_data = gt_data[page_start_idx:page_end_idx]
 
-    # input_json = f"/home/user/liushuai/DocBench-100/{num}/out_{num}.json"
-    input_json = f"/home/user/liushuai/DocBench-100/mineru/out_{num}.json"
-    input_data = []
-    data = load_data_from_json(input_json)
-    for i, page_data in enumerate(data):
-        if i == len(gt_data):
-            break
-        input_data.append(paddlex_generate_input_data(page_data, [gt_data[i]]))
+        # PaddleX
+        # input_jsons = glob.glob(
+        #     f"/home/shuai.liu01/PaddleXrc/api_examples/pipelines/all_gt/{num}/*.json"
+        # )
+        # input_jsons = glob.glob(
+        #     f"/home/shuai.liu01/PaddleXrc/api_examples/pipelines/{dir_name}/{num}/*.json"
+        # )
+        # input_jsons = glob.glob(
+        #     # f"/home/shuai.liu01/PaddleXrc/api_examples/pipelines/{dir_name}/*.json"
+        #     f"/home/shuai.liu01/PaddleXrc/api_examples/pipelines/complex_30/*.json"
+        # )
+        # input_jsons.sort(key=lambda x: int(os.path.basename(x).split("_")[1]))
+        # input_data = []
+        # for i, input_json in enumerate(input_jsons):
+        #     if i == len(gt_data):
+        #         break
+        #     data = load_data_from_json(input_json)
+        #     input_data.append(paddlex_generate_input_data(data, [gt_data[i]]))
 
-    # # MinerU
-    # data = load_data_from_json(f"/home/shuai.liu01/MinerU/{dir_name}_middle.json")
-    # input_data = mineru_generate_input_data(data,gt_data)
+        # input_data = load_data_from_json(input_json)
 
-    bleu_score, ard, tau, edit_dist = calculate_metrics_with_page(input_data, gt_data)
-    print(f"BLEU score: {bleu_score}, ARD: {ard}, Tau :{tau}, Edit_dist:{edit_dist}")
+        input_data = []
+        data = load_data_from_json(input_json)
+        for i, page_data in enumerate(data):
+            if i == len(gt_data):
+                break
+            input_data.append(paddlex_generate_input_data(page_data, [gt_data[i]]))
 
+        # # MinerU
+        # data = load_data_from_json(f"/home/shuai.liu01/PaddleXrc/mineru_results/mineru/{dir_name}_middle.json")
+        # input_data = mineru_generate_input_data(data,gt_data)
+        bleu_score, ard, tau, edit_dist = calculate_metrics_with_page(
+            input_data, gt_data, debug=debug
+        )
+        print(
+            f"{dir_name},BLEU score: {bleu_score}, ARD: {ard}, Tau :{tau}, Edit_dist:{edit_dist}"
+        )
+        total_bleu_score = total_bleu_score + bleu_score
+        total_ard = total_ard + ard
+        total_tau = total_tau + tau
+        total_edit_dist = total_edit_dist + edit_dist
+    return total_bleu_score, total_ard, total_tau, total_edit_dist
+
+
+if __name__ == "__main__":
+    main(True, start_idx=0, end_idx=4, num=30)
     # num_list = [30,70]
     # dir_list = ["all_gt"]
 

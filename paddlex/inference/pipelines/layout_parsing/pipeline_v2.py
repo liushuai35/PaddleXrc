@@ -236,6 +236,9 @@ class LayoutParsingPipelineV2(BasePipeline):
         text_rec_score_thresh: Optional[float] = None,
         page_data=None,
         page_index=-1,
+        min_gap_x=-1,
+        min_gap_y=-1,
+        is_only_x=False,
     ) -> list:
         """
         Retrieves the layout parsing result based on the layout detection result, OCR result, and other recognition results.
@@ -316,7 +319,11 @@ class LayoutParsingPipelineV2(BasePipeline):
                     overall_ocr_res["dt_polys"].extend(sub_ocr_res["dt_polys"])
                     overall_ocr_res["rec_texts"].extend(sub_ocr_res["rec_texts"])
                     overall_ocr_res["rec_boxes"] = np.concatenate(
-                        [overall_ocr_res["rec_boxes"], sub_ocr_res["rec_boxes"]], axis=0
+                        [
+                            overall_ocr_res["rec_boxes"],
+                            sub_ocr_res["rec_boxes"],
+                        ],
+                        axis=0,
                     )
                     overall_ocr_res["rec_polys"].extend(sub_ocr_res["rec_polys"])
                     overall_ocr_res["rec_scores"].extend(sub_ocr_res["rec_scores"])
@@ -344,6 +351,9 @@ class LayoutParsingPipelineV2(BasePipeline):
             seal_res_list=seal_res_list,
             page_data=page_data,
             page_index=page_index,
+            min_gap_x=min_gap_x,
+            min_gap_y=min_gap_y,
+            is_only_x=is_only_x,
         )
 
         return parsing_res_list
@@ -428,6 +438,10 @@ class LayoutParsingPipelineV2(BasePipeline):
         seal_rec_score_thresh: Union[float, None] = None,
         page_data=None,
         page_index=-1,
+        page_test_index=-1,
+        min_gap_x=-1,
+        min_gap_y=-1,
+        is_only_x=False,
         **kwargs,
     ) -> LayoutParsingResultV2:
         """
@@ -480,6 +494,10 @@ class LayoutParsingPipelineV2(BasePipeline):
             yield {"error": "the input params for model settings are invalid!"}
 
         for img_id, batch_data in enumerate(self.batch_sampler(input)):
+            if page_test_index != -1:
+                if img_id != page_test_index:
+                    continue
+
             image_array = self.img_reader(batch_data.instances)[0]
 
             if model_settings["use_doc_preprocessor"]:
@@ -557,7 +575,10 @@ class LayoutParsingPipelineV2(BasePipeline):
                         f"${formula_res['rec_formula']}$"
                     )
                     table_overall_ocr_res["rec_boxes"] = np.vstack(
-                        (table_overall_ocr_res["rec_boxes"], [formula_res["dt_polys"]])
+                        (
+                            table_overall_ocr_res["rec_boxes"],
+                            [formula_res["dt_polys"]],
+                        )
                     )
                     table_overall_ocr_res["rec_polys"].append(poly_points)
                     table_overall_ocr_res["rec_scores"].append(1)
@@ -613,6 +634,9 @@ class LayoutParsingPipelineV2(BasePipeline):
                 text_rec_score_thresh=text_rec_score_thresh,
                 page_data=page_data,
                 page_index=page_index,
+                min_gap_x=min_gap_x,
+                min_gap_y=min_gap_y,
+                is_only_x=is_only_x,
             )
 
             for formula_res in formula_res_list:
