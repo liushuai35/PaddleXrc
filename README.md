@@ -1,4 +1,3 @@
-【Layout ordering content has been submitted to ACMMM25】
 <p align="center">
   <img src="https://raw.githubusercontent.com/cuicheng01/PaddleX_doc_images/main/images/logo.png" width="735" height ="200" alt="PaddleX" align="middle" />
 </p>
@@ -17,6 +16,9 @@
 
 <h5 align="center">
   <a href="README.md">🇨🇳 简体中文</a> | <a href="README_en.md">🇬🇧 English</a></a>
+</h5>
+<h5 align="center">
+  【Layout ordering content has been submitted to ACMMM25】
 </h5>
 
 ## 🔍 简介
