@@ -1,3 +1,4 @@
+【Layout ordering content has been submitted to ACMMM25】
 <p align="center">
   <img src="https://raw.githubusercontent.com/cuicheng01/PaddleX_doc_images/main/images/logo.png" width="735" height ="200" alt="PaddleX" align="middle" />
 </p>
