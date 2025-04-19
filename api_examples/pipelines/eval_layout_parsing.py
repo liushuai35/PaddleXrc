@@ -250,7 +250,7 @@ def calculate_metrics_with_block(
         input_bboxes, input_indices, gt_bboxes, gt_indices, iou_threshold=0.5
     )
     if len(sorted_gt_indices) == 0:
-        return 1, 0, 1, 0, 0
+        return 1, 0, 1, 0, 0, 0
 
     if len(sorted_gt_indices) < 4 and sorted_gt_indices == sorted_matched_indices:
         bleu_score = 1
@@ -290,8 +290,9 @@ def calculate_metrics_with_block(
 
     if sorted_matched_indices == sorted_gt_indices:
         tau = 1
+        p = 0
     else:
-        tau, _ = kendalltau(sorted_matched_indices, sorted_gt_indices)
+        tau, p = kendalltau(sorted_matched_indices, sorted_gt_indices)
         import math
 
         if math.isnan(tau):
@@ -299,7 +300,7 @@ def calculate_metrics_with_block(
 
     edit_dist = Levenshtein.distance(sorted_matched_indices, sorted_gt_indices)
 
-    return bleu_score, ard, tau, edit_dist, len(sorted_gt_indices)
+    return bleu_score, ard, tau, edit_dist, len(sorted_gt_indices),p
 
 
 def calculate_metrics_with_page(
@@ -324,6 +325,7 @@ def calculate_metrics_with_page(
     total_match_block_num = 0
     total_edit_dist = 0
     total_length = 0
+    total_p = 0
 
     if not is_order_match:
         for block in input_data:
@@ -339,7 +341,7 @@ def calculate_metrics_with_page(
                         input_indices = [index + 1 for index in input_indices]
                     if 0 in gt_indices:
                         gt_indices = [index + 1 for index in gt_indices]
-                    bleu_score, ard, tau, edit_dist, length = (
+                    bleu_score, ard, tau, edit_dist, length,p = (
                         calculate_metrics_with_block(
                             j,
                             input_bboxes,
@@ -355,6 +357,7 @@ def calculate_metrics_with_page(
                     total_edit_dist += edit_dist
                     total_match_block_num += 1
                     total_length += length
+                    total_p += p
                     break
     else:
         bad_cases = []
@@ -367,7 +370,7 @@ def calculate_metrics_with_page(
                 input_indices = [index + 1 for index in input_indices]
             if 0 in gt_indices:
                 gt_indices = [index + 1 for index in gt_indices]
-            bleu_score, ard, tau, edit_dist, length = calculate_metrics_with_block(
+            bleu_score, ard, tau, edit_dist, length, p = calculate_metrics_with_block(
                 block_index,
                 input_bboxes,
                 input_indices,
@@ -383,8 +386,10 @@ def calculate_metrics_with_page(
             total_edit_dist += edit_dist
             total_match_block_num += 1
             total_length += length
+            total_p+= p
         if debug:
             print("bad cases:", bad_cases)
+    print(total_p / total_match_block_num)
     return (
         total_bleu_score / total_match_block_num,
         total_ard / total_match_block_num,
@@ -582,6 +587,7 @@ def write_data_from_json(path, data):
         json.dump(data, file, ensure_ascii=False, indent=4)
 
 
+
 def main(
     debug=False, start_idx=0, end_idx=4, page_start_idx=0, page_end_idx=None, num=-1
 ):
@@ -607,13 +613,13 @@ def main(
             gt_data = load_data_from_json(f"/home/shuai.liu01/gt_{num}.json")
         else:
             input_json = (
-                f"/home/shuai.liu01/PaddleXrc/input_jsons/output_{dir_name}.json"
+                f"/home/user/liushuai/omnidocbench/input/output_{dir_name}.json"
             )
             # input_json = (
             #     f"/home/shuai.liu01/PaddleXrc/mineru_results/output_{dir_name}.json"
             # )
             gt_data = load_data_from_json(
-                f"/home/shuai.liu01/PaddleXrc/gt/gt_{dir_name}.json"
+                f"/home/user/liushuai/omnidocbench/GT/gt_{dir_name}.json"
             )
 
         gt_data = gt_data[page_start_idx:page_end_idx]
