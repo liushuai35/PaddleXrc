@@ -1,7 +1,3 @@
-# New 
-please look https://github.com/liushuai35/DocumentPreprocessForRAG
-
-
 <p align="center">
   <img src="https://raw.githubusercontent.com/cuicheng01/PaddleX_doc_images/main/images/logo.png" width="735" height ="200" alt="PaddleX" align="middle" />
 </p>
