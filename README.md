@@ -22,7 +22,6 @@ please look https://github.com/liushuai35/DocumentPreprocessForRAG
   <a href="README.md">🇨🇳 简体中文</a> | <a href="README_en.md">🇬🇧 English</a></a>
 </h5>
 <h5 align="center">
-  【Layout ordering content has been submitted to ACMMM25】
 </h5>
 
 ## 🔍 简介
